@@ -102,8 +102,6 @@ export class User extends Document {
   @Prop({ default: true })
   isActive: boolean;
 }
-
+export type UserDocument = User & Document<Types.ObjectId>;
 export const UserSchema = SchemaFactory.createForClass(User);
 
-// ✅ Optional: Add geospatial index for addresses
-UserSchema.index({ 'addresses.location': '2dsphere' });

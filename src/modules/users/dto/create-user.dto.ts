@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, ValidateNested, IsArray, IsBoolean } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, ValidateNested, IsArray, IsBoolean,IsStrongPassword } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class ProfileDto {
@@ -34,7 +34,16 @@ class PaymentMethodDto {
 
 export class CreateUserDto {
   @IsEmail() email: string;
-  @IsString() @MinLength(6) password: string;
+  @IsString() @MinLength(8) 
+  @IsStrongPassword({
+    minLength: 8,
+    minLowercase: 1,
+    minUppercase: 1,
+    minNumbers: 1,
+    minSymbols: 1,
+  })
+  
+  password: string;
 
   @ValidateNested() @Type(() => ProfileDto) @IsOptional() profile?: ProfileDto;
   @ValidateNested({ each: true }) @Type(() => AddressDto) @IsOptional() addresses?: AddressDto[];
