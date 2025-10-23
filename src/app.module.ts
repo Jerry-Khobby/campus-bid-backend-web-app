@@ -6,11 +6,13 @@ import { ConfigModule } from '@nestjs/config';
 import { RedisOptions } from './config/redis-config';
 import { CacheModule } from '@nestjs/cache-manager';
 import { APP_INTERCEPTOR } from '@nestjs/core';
+import { UserModule } from './modules/users/user.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
-    MongooseModule.forRoot(process.env.MONGO_URI!),
+    MongooseModule.forRoot(process.env.MONGODB_URI!),
     CacheModule.registerAsync(RedisOptions),
+    UserModule,
 
   ],
   controllers: [AppController],
