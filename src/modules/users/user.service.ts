@@ -24,6 +24,7 @@ import { ResetPasswordDto } from "./dto/reset-password.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { UpdatePaymentMethodDto } from "./dto/update-payment-method.dto";
+import { MailService } from "src/utils/mail.service";
 
 interface CacheUser {
   id: string;
@@ -51,7 +52,8 @@ export class UserService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
+    private readonly mailService: MailService
   ) {}
 
   // ✅ CREATE USER (Signup)
@@ -220,8 +222,22 @@ export class UserService {
     await this.cacheManager.set(`reset:${resetToken}`, user._id.toString(), 900); // 15min
 
     // 📧 Send reset link (mock or integrate with mail service)
-    this.logger.log(`Password reset token generated for ${email}: ${resetToken}`);
+    const resetLink = `https://your-frontend-app.com/reset-password?token=${resetToken}`;
 
+  const html = `
+    <p>Hello ${user.profile?.firstName || "User"},</p>
+    <p>You requested a password reset. Click below to set a new password:</p>
+    <a href="${resetLink}" target="_blank">${resetLink}</a>
+    <p>This link will expire in 15 minutes.</p>
+  `;
+  try{
+    await this.mailService.sendEmail(email, "Reset your password", html);
+
+  }catch(err){
+    this.logger.error(`Error sending reset email: ${err.message}`);
+    throw new InternalServerErrorException("Could not send reset email")
+  }
+  this.logger.log(`Password reset link sent to ${email}`);
     return {
       success: true,
       message: "Password reset link sent to your email",
