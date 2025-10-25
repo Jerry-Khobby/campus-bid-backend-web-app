@@ -44,6 +44,13 @@ export interface SafeUser {
   updatedAt?: Date;
 }
 
+// We are supposed to take care of handling the image 
+// the user's image , and how it is been stored in the database 
+// We would first , have an account in cloudinary , 
+// host all images first there and 
+// store the url of those image in our database 
+// 
+
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -287,5 +294,12 @@ export class UserService {
     if (!user) throw new UnauthorizedException("User not found");
     
     return this.excludePassword(user);
+  }
+
+
+
+  //I want to Log out a user 
+  async logOut(){
+
   }
 }

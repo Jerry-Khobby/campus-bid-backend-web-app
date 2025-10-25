@@ -95,6 +95,11 @@ export class User extends Document {
     metadata?: Record<string, any>;
   }[];
 
+
+  //refresh token storage 
+  @Prop()
+  refreshToken:string;
+
   // Flags
   @Prop({ default: false })
   isVerified: boolean;
