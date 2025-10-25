@@ -33,6 +33,7 @@
     "@nestjs/swagger": "^11.2.1",
     "@nestjs/throttler": "^6.4.0",
     "@types/bcrypt": "^6.0.0",
+    "argon2": "^0.44.0",
     "bcrypt": "^6.0.0",
     "bull": "^4.16.5",
     "cache-manager": "^7.2.4",

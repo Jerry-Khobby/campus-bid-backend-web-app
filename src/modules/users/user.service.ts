@@ -6,6 +6,7 @@ import {
   InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
+  ForbiddenException,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
@@ -14,7 +15,6 @@ import type { Cache } from "cache-manager";
 import * as bcrypt from "bcrypt";
 import { JwtService } from "@nestjs/jwt";
 import { randomBytes } from "crypto";
-
 import { User, UserDocument } from "./schema/user.schema";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { LoginDto } from "./dto/login.dto";
@@ -25,6 +25,8 @@ import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { UpdatePaymentMethodDto } from "./dto/update-payment-method.dto";
 import { MailService } from "src/utils/mail.service";
+import { ConfigService } from "@nestjs/config";
+import * as argon2 from "argon2";
 
 interface CacheUser {
   id: string;
@@ -44,13 +46,6 @@ export interface SafeUser {
   updatedAt?: Date;
 }
 
-// We are supposed to take care of handling the image 
-// the user's image , and how it is been stored in the database 
-// We would first , have an account in cloudinary , 
-// host all images first there and 
-// store the url of those image in our database 
-// 
-
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -60,29 +55,30 @@ export class UserService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     private readonly jwtService: JwtService,
-    private readonly mailService: MailService
+    private readonly mailService: MailService,
+    private readonly configService: ConfigService,
   ) {}
 
   // ✅ CREATE USER (Signup)
   async createUser(
     createUserDto: CreateUserDto
-  ): Promise<{ user: SafeUser; token: string }> {
+  ): Promise<{ user: SafeUser; accessToken: string; refreshToken: string }> {
     const email = createUserDto.email.trim().toLowerCase();
 
-    // 1️⃣ Check cache or DB for existing user
+    // Check cache or DB for existing user
     const cachedUser = await this.cacheManager.get<CacheUser>(`user:${email}`);
     if (cachedUser) throw new ConflictException("User already exists");
 
     const existingUser = await this.userModel.findOne({ email }).lean();
     if (existingUser) throw new ConflictException("Email already registered");
 
-    // 2️⃣ Hash password
+    // Hash password
     const hashedPassword = await bcrypt.hash(
       createUserDto.password,
       this.SALT_ROUNDS
     );
 
-    // 3️⃣ Save user
+    // Save user
     const newUser = new this.userModel({
       ...createUserDto,
       email,
@@ -97,50 +93,51 @@ export class UserService {
       throw new InternalServerErrorException("Failed to create user");
     }
 
-    // 4️⃣ Cache minimal user info
+    // Cache minimal user info
     const cacheUser: CacheUser = {
       id: savedUser._id.toString(),
       email: savedUser.email,
     };
     await this.cacheManager.set(`user:${email}`, cacheUser, 3600);
 
-    // 5️⃣ Generate JWT immediately (auto login after signup)
-    const payload = { sub: savedUser._id, email: savedUser.email };
-    const token = await this.jwtService.signAsync(payload);
+    // Generate tokens
+    const tokens = await this.getTokens(savedUser._id.toString(), savedUser.email);
+    await this.updateRefreshToken(savedUser._id.toString(), tokens.refreshToken);
 
     const safeUser = this.excludePassword(savedUser);
 
-    this.logger.log(`User created & JWT generated: ${savedUser.email}`);
-    return { user: safeUser, token };
+    this.logger.log(`User created & tokens generated: ${savedUser.email}`);
+    return { user: safeUser, ...tokens };
   }
 
   // ✅ LOGIN
-  async loginUser(loginDto: LoginDto): Promise<{ user: SafeUser; token: string }> {
+  async loginUser(
+    loginDto: LoginDto
+  ): Promise<{ user: SafeUser; accessToken: string; refreshToken: string }> {
     const email = loginDto.email.trim().toLowerCase();
     const password = loginDto.password;
 
-    // 1️⃣ Try cache first
+    // Try cache first
     const cachedUser = await this.cacheManager.get<CacheUser>(`user:${email}`);
     let user: UserDocument | null = null;
 
     if (cachedUser) {
-      this.logger.log(`User found in cache: ${email}`);
       user = await this.userModel.findById(cachedUser.id);
     } else {
       user = await this.userModel.findOne({ email });
     }
 
-    // 2️⃣ Validate
+    // Validate
     if (!user) throw new NotFoundException("Invalid email or password");
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) throw new UnauthorizedException("Invalid email or password");
 
-    // 3️⃣ JWT
-    const payload = { sub: user._id, email: user.email };
-    const token = await this.jwtService.signAsync(payload);
+    // Generate tokens
+    const tokens = await this.getTokens(user._id.toString(), user.email);
+    await this.updateRefreshToken(user._id.toString(), tokens.refreshToken);
 
-    // 4️⃣ Cache for future
+    // Cache for future
     const cacheUser: CacheUser = {
       id: user._id.toString(),
       email: user.email,
@@ -150,7 +147,7 @@ export class UserService {
     const safeUser = this.excludePassword(user);
 
     this.logger.log(`User logged in successfully: ${email}`);
-    return { user: safeUser, token };
+    return { user: safeUser, ...tokens };
   }
 
   // ✅ UPDATE PROFILE
@@ -219,7 +216,7 @@ export class UserService {
     return { success: true, message: "Password updated successfully" };
   }
 
-  // ✅ FORGOT PASSWORD (Generate Reset Token)
+  // ✅ FORGOT PASSWORD
   async forgotPassword(dto: ForgotPasswordDto) {
     const email = dto.email.toLowerCase();
     const user = await this.userModel.findOne({ email });
@@ -228,31 +225,30 @@ export class UserService {
     const resetToken = randomBytes(32).toString("hex");
     await this.cacheManager.set(`reset:${resetToken}`, user._id.toString(), 900); // 15min
 
-    // 📧 Send reset link (mock or integrate with mail service)
     const resetLink = `https://your-frontend-app.com/reset-password?token=${resetToken}`;
+    const html = `
+      <p>Hello ${user.profile?.firstName || "User"},</p>
+      <p>You requested a password reset. Click below to set a new password:</p>
+      <a href="${resetLink}" target="_blank">${resetLink}</a>
+      <p>This link will expire in 15 minutes.</p>
+    `;
 
-  const html = `
-    <p>Hello ${user.profile?.firstName || "User"},</p>
-    <p>You requested a password reset. Click below to set a new password:</p>
-    <a href="${resetLink}" target="_blank">${resetLink}</a>
-    <p>This link will expire in 15 minutes.</p>
-  `;
-  try{
-    await this.mailService.sendEmail(email, "Reset your password", html);
+    try {
+      await this.mailService.sendEmail(email, "Reset your password", html);
+    } catch (err) {
+      this.logger.error(`Error sending reset email: ${err.message}`);
+      throw new InternalServerErrorException("Could not send reset email");
+    }
 
-  }catch(err){
-    this.logger.error(`Error sending reset email: ${err.message}`);
-    throw new InternalServerErrorException("Could not send reset email")
-  }
-  this.logger.log(`Password reset link sent to ${email}`);
+    this.logger.log(`Password reset link sent to ${email}`);
     return {
       success: true,
       message: "Password reset link sent to your email",
-      resetToken, // remove in prod, only for testing
+      resetToken, // remove in production
     };
   }
 
-  // ✅ RESET PASSWORD (with token)
+  // ✅ RESET PASSWORD
   async resetPassword(dto: ResetPasswordDto) {
     const userId = await this.cacheManager.get<string>(`reset:${dto.token}`);
     if (!userId) throw new UnauthorizedException("Invalid or expired reset token");
@@ -270,36 +266,78 @@ export class UserService {
     return { success: true, message: "Password has been reset successfully" };
   }
 
-  // ✅ GET USER PROFILE (without password)
+  // ✅ GET USER PROFILE
   async getUserProfile(userId: string): Promise<SafeUser> {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
-
     return this.excludePassword(user);
-  }
-
-  // ✅ PRIVATE HELPER: Exclude password from user object
-  private excludePassword(user: UserDocument): SafeUser {
-    const userObj = user.toObject ? user.toObject() : user;
-    
-    // Create a new object without the password field
-    const { password, ...userWithoutPassword } = userObj;
-    
-    return userWithoutPassword as SafeUser;
   }
 
   // ✅ VALIDATE USER (for auth guards)
   async validateUser(payload: any): Promise<SafeUser> {
     const user = await this.userModel.findById(payload.sub);
     if (!user) throw new UnauthorizedException("User not found");
-    
     return this.excludePassword(user);
   }
 
+  // ✅ LOGOUT
+  async logOut(userId: string) {
+    await this.userModel.findByIdAndUpdate(userId, { refreshToken: null });
+    return { success: true, message: "User logged out successfully" };
+  }
 
+  // ✅ TOKEN HELPERS
+  hashData(data: string) {
+    return argon2.hash(data);
+  }
 
-  //I want to Log out a user 
-  async logOut(){
+  async updateRefreshToken(userId: string, refreshToken: string) {
+    const hashedToken = await this.hashData(refreshToken);
+    await this.userModel.findByIdAndUpdate(userId, { refreshToken: hashedToken });
+  }
 
+  async getTokens(userId: string, email: string) {
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(
+        { sub: userId, email },
+        {
+          secret: this.configService.get<string>("JWT_ACCESS_SECRET"),
+          expiresIn: "15m",
+        }
+      ),
+      this.jwtService.signAsync(
+        { sub: userId, email },
+        {
+          secret: this.configService.get<string>("JWT_REFRESH_SECRET"),
+          expiresIn: "7d",
+        }
+      ),
+    ]);
+
+    return { accessToken, refreshToken };
+  }
+
+  async refreshTokens(userId: string, refreshToken: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user || !user.refreshToken)
+      throw new ForbiddenException("Access Denied");
+
+    const refreshTokenMatches = await argon2.verify(
+      user.refreshToken,
+      refreshToken
+    );
+
+    if (!refreshTokenMatches) throw new ForbiddenException("Access Denied");
+
+    const tokens = await this.getTokens(user.id, user.email);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+    return tokens;
+  }
+
+  // ✅ Helper: exclude password field
+  private excludePassword(user: UserDocument): SafeUser {
+    const userObj = user.toObject ? user.toObject() : user;
+    const { password, ...rest } = userObj;
+    return rest as SafeUser;
   }
 }

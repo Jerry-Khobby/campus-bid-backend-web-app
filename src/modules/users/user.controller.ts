@@ -5,6 +5,7 @@ import {
   Get,
   UseGuards,
   Request,
+  Req,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -23,10 +24,10 @@ import { ResetPasswordDto } from "./dto/reset-password.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { UpdatePaymentMethodDto } from "./dto/update-payment-method.dto";
-import { AuthGuard } from "../../common/guards/jwt-auth.guard";
-import { SafeUser } from "./user.service";
+import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
+import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 
-@ApiTags("Users") // 📘 Groups all endpoints under 'Users' in Swagger
+@ApiTags("Users") // 📘 Group all endpoints under 'Users' in Swagger
 @Controller("users")
 export class UserController {
   constructor(private readonly userService: UserService) {}
@@ -38,20 +39,6 @@ export class UserController {
   @ApiResponse({
     status: 201,
     description: "User registered successfully",
-    schema: {
-      example: {
-        success: true,
-        message: "User registered successfully",
-        user: {
-          _id: "abc123",
-          email: "user@example.com",
-          role: "user",
-          profile: {},
-          isVerified: false,
-        },
-        token: "jwt.token.here",
-      },
-    },
   })
   async register(@Body() createUserDto: CreateUserDto) {
     const result = await this.userService.createUser(createUserDto);
@@ -64,24 +51,11 @@ export class UserController {
 
   // ✅ LOGIN
   @Post("login")
-  @ApiOperation({ summary: "Login user and return JWT token" })
+  @ApiOperation({ summary: "Login user and return JWT tokens" })
   @ApiBody({ type: LoginDto })
   @ApiResponse({
     status: 200,
     description: "Login successful",
-    schema: {
-      example: {
-        success: true,
-        message: "Login successful",
-        user: {
-          _id: "abc123",
-          email: "user@example.com",
-          role: "user",
-          profile: {},
-        },
-        token: "jwt.token.here",
-      },
-    },
   })
   async login(@Body() loginDto: LoginDto) {
     const result = await this.userService.loginUser(loginDto);
@@ -92,28 +66,14 @@ export class UserController {
     };
   }
 
-  // ✅ GET PROFILE
-  @UseGuards(AuthGuard)
+  // ✅ GET PROFILE (AccessTokenGuard)
+  @UseGuards(AccessTokenGuard)
   @Get("profile")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get authenticated user profile" })
   @ApiResponse({
     status: 200,
     description: "Profile fetched successfully",
-    type: Object,
-    schema: {
-      example: {
-        success: true,
-        message: "Profile fetched successfully",
-        user: {
-          _id: "abc123",
-          email: "user@example.com",
-          role: "user",
-          profile: {},
-          isVerified: true,
-        },
-      },
-    },
   })
   async getProfile(@Request() req) {
     const user = await this.userService.getUserProfile(req.user.sub);
@@ -124,8 +84,8 @@ export class UserController {
     };
   }
 
-  // ✅ CHANGE PASSWORD
-  @UseGuards(AuthGuard)
+  // ✅ CHANGE PASSWORD (AccessTokenGuard)
+  @UseGuards(AccessTokenGuard)
   @Post("change-password")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Change user password" })
@@ -133,58 +93,37 @@ export class UserController {
   @ApiResponse({
     status: 200,
     description: "Password updated successfully",
-    schema: {
-      example: { success: true, message: "Password updated successfully" },
-    },
   })
   async changePassword(@Request() req, @Body() changePasswordDto: ChangePasswordDto) {
-    const result = await this.userService.changePassword(
-      req.user.sub,
-      changePasswordDto
-    );
-    return result;
+    return this.userService.changePassword(req.user.sub, changePasswordDto);
   }
 
-  // ✅ FORGOT PASSWORD
+  // ✅ FORGOT PASSWORD (Public)
   @Post("forgot-password")
   @ApiOperation({ summary: "Request password reset token" })
   @ApiBody({ type: ForgotPasswordDto })
   @ApiResponse({
     status: 200,
     description: "Reset token sent to email",
-    schema: {
-      example: {
-        success: true,
-        message: "Password reset link sent to your email",
-      },
-    },
   })
   async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
-    const result = await this.userService.forgotPassword(forgotPasswordDto);
-    return result;
+    return this.userService.forgotPassword(forgotPasswordDto);
   }
 
-  // ✅ RESET PASSWORD
+  // ✅ RESET PASSWORD (Public)
   @Post("reset-password")
   @ApiOperation({ summary: "Reset password using reset token" })
   @ApiBody({ type: ResetPasswordDto })
   @ApiResponse({
     status: 200,
     description: "Password reset successfully",
-    schema: {
-      example: {
-        success: true,
-        message: "Password has been reset successfully",
-      },
-    },
   })
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
-    const result = await this.userService.resetPassword(resetPasswordDto);
-    return result;
+    return this.userService.resetPassword(resetPasswordDto);
   }
 
-  // ✅ UPDATE PROFILE
-  @UseGuards(AuthGuard)
+  // ✅ UPDATE PROFILE (AccessTokenGuard)
+  @UseGuards(AccessTokenGuard)
   @Post("update-profile")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update user profile" })
@@ -192,16 +131,6 @@ export class UserController {
   @ApiResponse({
     status: 200,
     description: "Profile updated successfully",
-    schema: {
-      example: {
-        success: true,
-        message: "Profile updated successfully",
-        user: {
-          email: "user@example.com",
-          profile: { name: "John Doe", avatar: "url" },
-        },
-      },
-    },
   })
   async updateProfile(@Request() req, @Body() updateProfileDto: UpdateProfileDto) {
     const user = await this.userService.updateUser(req.user.sub, updateProfileDto);
@@ -212,8 +141,8 @@ export class UserController {
     };
   }
 
-  // ✅ UPDATE ADDRESS
-  @UseGuards(AuthGuard)
+  // ✅ UPDATE ADDRESS (AccessTokenGuard)
+  @UseGuards(AccessTokenGuard)
   @Post("update-address")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Add or update user address" })
@@ -221,15 +150,6 @@ export class UserController {
   @ApiResponse({
     status: 200,
     description: "Address updated successfully",
-    schema: {
-      example: {
-        success: true,
-        message: "Address updated successfully",
-        addresses: [
-          { label: "Home", city: "Accra", country: "Ghana" },
-        ],
-      },
-    },
   })
   async updateAddress(@Request() req, @Body() updateAddressDto: UpdateAddressDto) {
     const addresses = await this.userService.updateAddress(req.user.sub, updateAddressDto);
@@ -240,8 +160,8 @@ export class UserController {
     };
   }
 
-  // ✅ UPDATE PAYMENT METHOD
-  @UseGuards(AuthGuard)
+  // ✅ UPDATE PAYMENT METHOD (AccessTokenGuard)
+  @UseGuards(AccessTokenGuard)
   @Post("update-payment-method")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Add or update user payment method" })
@@ -249,15 +169,6 @@ export class UserController {
   @ApiResponse({
     status: 200,
     description: "Payment method updated successfully",
-    schema: {
-      example: {
-        success: true,
-        message: "Payment method updated successfully",
-        paymentMethods: [
-          { type: "Card", last4: "1234", provider: "Visa" },
-        ],
-      },
-    },
   })
   async updatePaymentMethod(@Request() req, @Body() updatePaymentMethodDto: UpdatePaymentMethodDto) {
     const paymentMethods = await this.userService.updatePaymentMethod(req.user.sub, updatePaymentMethodDto);
@@ -265,6 +176,44 @@ export class UserController {
       success: true,
       message: "Payment method updated successfully",
       paymentMethods,
+    };
+  }
+
+  // ✅ LOGOUT (AccessTokenGuard)
+  @UseGuards(AccessTokenGuard)
+  @Get("logout")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Log out the authenticated user" })
+  @ApiResponse({
+    status: 200,
+    description: "User logged out successfully",
+  })
+  async logout(@Request() req) {
+
+    await this.userService.logOut(req.user["sub"]);
+    return {
+      success: true,
+      message: "Logged out successfully",
+    };
+  }
+
+  // ✅ REFRESH TOKENS (RefreshTokenGuard)
+  @UseGuards(RefreshTokenGuard)
+  @Post("refresh")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Refresh expired access token using refresh token" })
+  @ApiResponse({
+    status: 200,
+    description: "New tokens generated successfully",
+  })
+  async refreshTokens(@Req() req: any) {
+    const userId = req.user["sub"];
+    const refreshToken = req.user["refreshToken"];
+    const tokens = await this.userService.refreshTokens(userId, refreshToken);
+    return {
+      success: true,
+      message: "Tokens refreshed successfully",
+      tokens,
     };
   }
 }

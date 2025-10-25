@@ -97,8 +97,8 @@ export class User extends Document {
 
 
   //refresh token storage 
-  @Prop()
-  refreshToken:string;
+  @Prop({default:null})
+  refreshToken?:string;
 
   // Flags
   @Prop({ default: false })

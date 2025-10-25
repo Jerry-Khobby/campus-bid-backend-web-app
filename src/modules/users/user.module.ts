@@ -6,6 +6,8 @@ import { User, UserSchema } from "./schema/user.schema";
 import { JwtModule } from "@nestjs/jwt";
 import { ConfigModule,ConfigService } from "@nestjs/config";
 import { MailModule } from "src/utils/mail.module";
+import { RefreshTokenStrategy } from "src/common/guards/strategies/refresh-token.strategy";
+import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.strategy";
 
 @Module({
   imports: [
@@ -17,13 +19,13 @@ import { MailModule } from "src/utils/mail.module";
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         global: true,
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '3d' },
+        secret: configService.get<string>('JWT_ACCESS_SECRET'),
+        signOptions: { expiresIn: '15m' },
       }),
     }),
   ],
   controllers: [UserController],
-  providers: [UserService],
+  providers: [UserService,AccessTokenStrategy,RefreshTokenStrategy],
   exports: [UserService],
 })
 export class UserModule {}

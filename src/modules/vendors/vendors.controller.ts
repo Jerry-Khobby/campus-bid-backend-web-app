@@ -17,7 +17,7 @@ import { UpdateLocationDto } from "./dto/update-location.dto";
 import { ChangePasswordDto } from "../users/dto/change-password.dto";
 import { ForgotPasswordDto } from "../users/dto/forgot-password.dto";
 import { ResetPasswordDto } from "../users/dto/reset-password.dto";
-import { AuthGuard } from "src/common/guards/jwt-auth.guard";
+//import { AuthGuard } from "src/common/guards/jwt-refresh.guard";
 
 @ApiTags("Vendors")
 @Controller("vendors")
@@ -49,7 +49,7 @@ export class VendorController {
   }
 
   // ✅ PROFILE
-  @UseGuards(AuthGuard)
+ // @UseGuards(AuthGuard)
   @Get("profile")
   @ApiBearerAuth()
   async profile(@Request() req) {
@@ -58,7 +58,7 @@ export class VendorController {
   }
 
   // ✅ UPDATE PROFILE
-  @UseGuards(AuthGuard)
+ // @UseGuards(AuthGuard)
   @Post("update-profile")
   @ApiBearerAuth()
   async updateProfile(@Request() req, @Body() dto: UpdateProfileDto) {
@@ -67,7 +67,7 @@ export class VendorController {
   }
 
   // ✅ UPDATE LOCATION
-  @UseGuards(AuthGuard)
+ // @UseGuards(AuthGuard)
   @Post("update-location")
   @ApiBearerAuth()
   async updateLocation(@Request() req, @Body() dto: UpdateLocationDto) {
@@ -76,7 +76,7 @@ export class VendorController {
   }
 
   // ✅ UPDATE BUSINESS HOURS
-  @UseGuards(AuthGuard)
+ // @UseGuards(AuthGuard)
   @Post("update-business-hours")
   @ApiBearerAuth()
   async updateBusinessHours(@Request() req, @Body() dto: UpdateBusinessHoursDto) {
@@ -85,7 +85,7 @@ export class VendorController {
   }
 
   // ✅ UPDATE BANK DETAILS
-  @UseGuards(AuthGuard)
+  //@UseGuards(AuthGuard)
   @Post("update-bank-details")
   @ApiBearerAuth()
   async updateBankDetails(@Request() req, @Body() dto: UpdateBankDetailsDto) {
@@ -94,7 +94,7 @@ export class VendorController {
   }
 
   // ✅ CHANGE PASSWORD
-  @UseGuards(AuthGuard)
+  //@UseGuards(AuthGuard)
   @Post("change-password")
   @ApiBearerAuth()
   async changePassword(@Request() req, @Body() dto: ChangePasswordDto) {

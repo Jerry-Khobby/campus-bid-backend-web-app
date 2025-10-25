@@ -45,6 +45,9 @@ export class CreateUserDto {
   
   password: string;
 
+  @IsString()
+  refreshToken: string;
+
   @ValidateNested() @Type(() => ProfileDto) @IsOptional() profile?: ProfileDto;
   @ValidateNested({ each: true }) @Type(() => AddressDto) @IsOptional() addresses?: AddressDto[];
   @IsArray() @IsOptional() savedItems?: string[];
