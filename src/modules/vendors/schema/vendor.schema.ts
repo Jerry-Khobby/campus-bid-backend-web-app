@@ -114,6 +114,9 @@ export class Vendor extends Document {
     isVerified?: boolean;
   };
 
+    @Prop({default:null})
+    refreshToken?:string;
+
   @Prop({ default: false })
   isVerified: boolean;
 

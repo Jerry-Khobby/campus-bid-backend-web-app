@@ -46,6 +46,13 @@ export interface SafeUser {
   updatedAt?: Date;
 }
 
+
+
+//I will come and work on the user's profile image later 
+//where the user will be able to update their profile image 
+// I will first pass the image through cloudinary 
+// and store the url in the database 
+
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);

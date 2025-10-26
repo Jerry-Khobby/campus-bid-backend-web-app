@@ -6,16 +6,17 @@ import {
   InternalServerErrorException,
   Logger,
   Inject,
+  ForbiddenException,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
-import { Model } from "mongoose";
+import { Model, Types } from "mongoose";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { randomBytes } from "crypto";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
 import type { Cache } from "cache-manager";
 
-import { Vendor,VendorDocument } from "./schema/vendor.schema";
+import { Vendor, VendorDocument } from "./schema/vendor.schema";
 import { CreateVendorDto } from "./dto/create-vendor.dto";
 import { VendorLoginDto } from "./dto/vendor-login.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
@@ -26,6 +27,8 @@ import { ChangePasswordDto } from "../users/dto/change-password.dto";
 import { ForgotPasswordDto } from "../users/dto/forgot-password.dto";
 import { ResetPasswordDto } from "../users/dto/reset-password.dto";
 import { MailService } from "src/utils/mail.service";
+import * as argon2 from "argon2";
+import { ConfigService } from "@nestjs/config";
 
 interface CacheVendor {
   id: string;
@@ -33,7 +36,7 @@ interface CacheVendor {
 }
 
 export interface SafeVendor {
-  _id: any;
+  _id: string;
   email: string;
   role: string;
   profile: any;
@@ -57,21 +60,23 @@ export class VendorService {
     @InjectModel(Vendor.name) private readonly vendorModel: Model<VendorDocument>,
     private readonly jwtService: JwtService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
-    private readonly mailService: MailService
+    private readonly mailService: MailService,
+    private readonly configService: ConfigService,
   ) {}
 
-  // ✅ REGISTER VENDOR
-  async createVendor(dto: CreateVendorDto): Promise<{ vendor: SafeVendor; token: string }> {
+  // -----------------------
+  // REGISTER VENDOR
+  // -----------------------
+  async createVendor(
+    dto: CreateVendorDto
+  ): Promise<{ vendor: SafeVendor; accessToken: string; refreshToken: string }> {
     const email = dto.email.trim().toLowerCase();
 
-    // 1️⃣ Check existing
     const existing = await this.vendorModel.findOne({ email }).lean();
     if (existing) throw new ConflictException("Vendor already registered");
 
-    // 2️⃣ Hash password
     const hashedPassword = await bcrypt.hash(dto.password, this.SALT_ROUNDS);
 
-    // 3️⃣ Create vendor
     const vendor = new this.vendorModel({
       ...dto,
       email,
@@ -79,46 +84,64 @@ export class VendorService {
       role: "vendor",
     });
 
-    const saved = await vendor.save();
+    let saved: VendorDocument;
+    try {
+      saved = (await vendor.save()) as VendorDocument;
+    } catch (err) {
+      this.logger.error("Error saving vendor", err);
+      throw new InternalServerErrorException("Failed to create vendor");
+    }
 
-    // 4️⃣ Cache vendor
-    await this.cacheManager.set(`vendor:${email}`, { id: saved._id, email }, 3600);
+    const vendorId = (saved._id as Types.ObjectId).toString();
 
-    // 5️⃣ Generate JWT
-    const payload = { sub: saved._id, email: saved.email };
-    const token = await this.jwtService.signAsync(payload);
+    const cacheVendor: CacheVendor = {
+      id: vendorId,
+      email: saved.email,
+    };
+    await this.cacheManager.set(`vendor:${email}`, cacheVendor, 3600);
+
+    const { accessToken, refreshToken } = await this.getTokens(vendorId, saved.email);
+    await this.updateRefreshToken(vendorId, refreshToken);
 
     this.logger.log(`Vendor created: ${email}`);
-    return { vendor: this.excludePassword(saved), token };
+    return { vendor: this.excludePassword(saved), accessToken, refreshToken };
   }
 
-  // ✅ LOGIN
-  async loginVendor(dto: VendorLoginDto): Promise<{ vendor: SafeVendor; token: string }> {
+  // -----------------------
+  // LOGIN VENDOR
+  // -----------------------
+  async loginVendor(
+    dto: VendorLoginDto
+  ): Promise<{ vendor: SafeVendor; accessToken: string; refreshToken: string }> {
     const email = dto.email.trim().toLowerCase();
     const vendor = await this.vendorModel.findOne({ email });
-
     if (!vendor) throw new NotFoundException("Invalid email or password");
 
     const valid = await bcrypt.compare(dto.password, vendor.password);
     if (!valid) throw new UnauthorizedException("Invalid email or password");
 
-    const payload = { sub: vendor._id, email: vendor.email };
-    const token = await this.jwtService.signAsync(payload);
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+    const { accessToken, refreshToken } = await this.getTokens(vendorId, vendor.email);
+    await this.updateRefreshToken(vendorId, refreshToken);
 
-    await this.cacheManager.set(`vendor:${email}`, { id: vendor._id, email }, 3600);
+    await this.cacheManager.set(`vendor:${email}`, { id: vendorId, email }, 3600);
 
     this.logger.log(`Vendor logged in: ${email}`);
-    return { vendor: this.excludePassword(vendor), token };
+    return { vendor: this.excludePassword(vendor), accessToken, refreshToken };
   }
 
-  // ✅ GET PROFILE
+  // -----------------------
+  // GET PROFILE
+  // -----------------------
   async getVendorProfile(id: string): Promise<SafeVendor> {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
     return this.excludePassword(vendor);
   }
 
-  // ✅ UPDATE PROFILE
+  // -----------------------
+  // UPDATE PROFILE
+  // -----------------------
   async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
@@ -126,11 +149,16 @@ export class VendorService {
     vendor.profile = { ...vendor.profile, ...dto };
     await vendor.save();
 
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+
     this.logger.log(`Vendor profile updated: ${vendor.email}`);
     return this.excludePassword(vendor);
   }
 
-  // ✅ UPDATE LOCATION
+  // -----------------------
+  // UPDATE LOCATION
+  // -----------------------
   async updateLocation(id: string, dto: UpdateLocationDto) {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
@@ -138,11 +166,16 @@ export class VendorService {
     vendor.location = { ...vendor.location, ...dto, type: "Point" };
     await vendor.save();
 
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+
     this.logger.log(`Location updated: ${vendor.email}`);
     return vendor.location;
   }
 
-  // ✅ UPDATE BUSINESS HOURS
+  // -----------------------
+  // UPDATE BUSINESS HOURS
+  // -----------------------
   async updateBusinessHours(id: string, dto: UpdateBusinessHoursDto) {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
@@ -150,11 +183,16 @@ export class VendorService {
     vendor.businessHours = dto.businessHours;
     await vendor.save();
 
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+
     this.logger.log(`Business hours updated: ${vendor.email}`);
     return vendor.businessHours;
   }
 
-  // ✅ UPDATE BANK DETAILS
+  // -----------------------
+  // UPDATE BANK DETAILS
+  // -----------------------
   async updateBankDetails(id: string, dto: UpdateBankDetailsDto) {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
@@ -162,11 +200,16 @@ export class VendorService {
     vendor.bankDetails = { ...vendor.bankDetails, ...dto };
     await vendor.save();
 
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+
     this.logger.log(`Bank details updated: ${vendor.email}`);
     return vendor.bankDetails;
   }
 
-  // ✅ CHANGE PASSWORD
+  // -----------------------
+  // CHANGE PASSWORD
+  // -----------------------
   async changePassword(id: string, dto: ChangePasswordDto) {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
@@ -181,17 +224,19 @@ export class VendorService {
     return { success: true, message: "Password changed successfully" };
   }
 
-  // ✅ FORGOT PASSWORD
+  // -----------------------
+  // FORGOT PASSWORD
+  // -----------------------
   async forgotPassword(dto: ForgotPasswordDto) {
-    const vendor = await this.vendorModel.findOne({ email: dto.email });
+    const vendor = await this.vendorModel.findOne({ email: dto.email.toLowerCase() });
     if (!vendor) throw new NotFoundException("Vendor not found");
 
     const resetToken = randomBytes(32).toString("hex");
-    //I will start working from here 
-    await this.cacheManager.set(`vendor-reset:${resetToken}`, vendor.toString(), 900);
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+
+    await this.cacheManager.set(`vendor-reset:${resetToken}`, vendorId, 900);
 
     const resetLink = `https://your-vendor-dashboard.com/reset-password?token=${resetToken}`;
-
     const html = `
       <p>Hello ${vendor.profile?.businessName || "Vendor"},</p>
       <p>Click below to reset your password:</p>
@@ -210,7 +255,9 @@ export class VendorService {
     return { success: true, message: "Password reset link sent", resetToken };
   }
 
-  // ✅ RESET PASSWORD
+  // -----------------------
+  // RESET PASSWORD
+  // -----------------------
   async resetPassword(dto: ResetPasswordDto) {
     const vendorId = await this.cacheManager.get<string>(`vendor-reset:${dto.token}`);
     if (!vendorId) throw new UnauthorizedException("Invalid or expired reset token");
@@ -227,10 +274,59 @@ export class VendorService {
     return { success: true, message: "Password reset successfully" };
   }
 
-  // ✅ PRIVATE HELPER
+  // -----------------------
+  // LOGOUT
+  // -----------------------
+  async logOut(id: string) {
+    await this.vendorModel.findByIdAndUpdate(id, { refreshToken: null });
+    return { success: true, message: "User logged out successfully" };
+  }
+
+  // -----------------------
+  // TOKEN HELPERS
+  // -----------------------
+  hashData(data: string) {
+    return argon2.hash(data);
+  }
+
+  async updateRefreshToken(id: string, refreshToken: string) {
+    const hashed = await argon2.hash(refreshToken);
+    await this.vendorModel.findByIdAndUpdate(id, { refreshToken: hashed });
+  }
+
+  async getTokens(id: string, email: string) {
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync({ sub: id, email }, {
+        secret: this.configService.get<string>("JWT_ACCESS_SECRET"),
+        expiresIn: "15m",
+      }),
+      this.jwtService.signAsync({ sub: id, email }, {
+        secret: this.configService.get<string>("JWT_REFRESH_SECRET"),
+        expiresIn: "7d",
+      }),
+    ]);
+    return { accessToken, refreshToken };
+  }
+
+  async refreshTokens(id: string, refreshToken: string) {
+    const vendor = await this.vendorModel.findById(id);
+    if (!vendor || !vendor.refreshToken) throw new ForbiddenException("Access Denied");
+
+    const matches = await argon2.verify(vendor.refreshToken, refreshToken);
+    if (!matches) throw new ForbiddenException("Access Denied");
+
+    const vendorId = (vendor._id as Types.ObjectId).toString();
+    const tokens = await this.getTokens(vendorId, vendor.email);
+    await this.updateRefreshToken(vendorId, tokens.refreshToken);
+    return tokens;
+  }
+
+  // -----------------------
+  // PRIVATE HELPER
+  // -----------------------
   private excludePassword(vendor: VendorDocument): SafeVendor {
     const obj = vendor.toObject();
-    const { password, ...rest } = obj;
-    return rest as SafeVendor;
+    const { password, refreshToken, ...rest } = obj;
+    return { ...rest, _id: (vendor._id as Types.ObjectId).toString() } as SafeVendor;
   }
 }
