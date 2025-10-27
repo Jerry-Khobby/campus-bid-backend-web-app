@@ -13,7 +13,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   const config = new DocumentBuilder()
-      .setTitle('NestJS Application')
+      .setTitle('CampusBid Backend')
       .setDescription('The backend for Ecommerce CampusBid site')
       .setVersion('1.0')
       .addTag('Ecommerce CampusBid')
