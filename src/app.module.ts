@@ -8,13 +8,15 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { UserModule } from './modules/users/user.module';
 import { VendorModule } from './modules/vendors/vendors.module';
+import { ProductsModule } from './modules/products/products.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
     MongooseModule.forRoot(process.env.MONGODB_URI!),
     CacheModule.registerAsync(RedisOptions),
     UserModule,
-    VendorModule
+    VendorModule,
+    ProductsModule,
 
   ],
   controllers: [AppController],
