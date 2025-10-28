@@ -1,5 +1,6 @@
 import { IsMongoId, IsNotEmpty, IsString } from 'class-validator';
 import { Types } from 'mongoose';
+import { FlashSaleReason } from './enums';
 
 export class CancelFlashSaleDto {
   @IsMongoId()
@@ -8,5 +9,5 @@ export class CancelFlashSaleDto {
 
   @IsString()
   @IsNotEmpty()
-  reason: string;
+  reason: FlashSaleReason;
 }

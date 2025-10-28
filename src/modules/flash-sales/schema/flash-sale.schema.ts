@@ -1,66 +1,79 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
+export enum FlashSaleStatus {
+  UPCOMING = 'upcoming',
+  ACTIVE = 'active',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+}
+
+export enum FlashSaleReason {
+  CLOSING_TIME = 'closing_time',
+  EXPIRING_STOCK = 'expiring_stock',
+}
+
 @Schema({ timestamps: true })
-export class FlashSale extends Document {
+export class FlashSale {
   @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true })
   vendorId: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'Product', required: true })
   productId: Types.ObjectId;
 
-  @Prop({ type: Number, required: true })
+  @Prop({ required: true })
   originalPrice: number;
 
-  @Prop({ type: Number, required: true })
+  @Prop({ required: true })
   startingBid: number;
 
-  @Prop({ type: Number })
+  @Prop()
   currentBid?: number;
 
   @Prop({ type: Types.ObjectId, ref: 'User' })
   currentBidder?: Types.ObjectId;
 
-  @Prop({ type: Number, default: 1 })
+  @Prop({ default: 1 })
   minimumBidIncrement: number;
 
-  @Prop({ type: Number, default: 1 })
+  @Prop({ default: 1 })
   quantity: number;
 
-  @Prop({ type: Date, required: true })
+  @Prop({ required: true })
   startTime: Date;
 
-  @Prop({ type: Date, required: true })
+  @Prop({ required: true })
   endTime: Date;
 
   @Prop({
     type: String,
-    enum: ['upcoming', 'active', 'completed', 'cancelled'],
-    default: 'upcoming',
+    enum: Object.values(FlashSaleStatus),
+    default: FlashSaleStatus.UPCOMING,
   })
-  status: 'upcoming' | 'active' | 'completed' | 'cancelled';
+  status: FlashSaleStatus;
 
   @Prop([
     {
-      userId: { type: Types.ObjectId, ref: 'User', required: true },
-      amount: { type: Number, required: true },
-      timestamp: { type: Date, default: Date.now },
+      userId: { type: Types.ObjectId, ref: 'User' },
+      amount: Number,
+      timestamp: Date,
     },
   ])
-  bids: {
+  bids: Array<{
     userId: Types.ObjectId;
     amount: number;
     timestamp: Date;
-  }[];
+  }>;
 
   @Prop({ type: Types.ObjectId, ref: 'User' })
   winner?: Types.ObjectId;
 
   @Prop({
     type: String,
-    enum: ['closing_time', 'expiring_stock'],
+    enum: Object.values(FlashSaleReason),
   })
-  reason?: string;
+  reason?: FlashSaleReason;
 }
 
+export type FlashSaleDocument = FlashSale & Document;
 export const FlashSaleSchema = SchemaFactory.createForClass(FlashSale);
