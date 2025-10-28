@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsNotEmpty, MinLength, ValidateNested, IsOptional, IsArray, ArrayNotEmpty } from "class-validator";
+import { IsString, IsEmail, IsNotEmpty,IsStrongPassword, MinLength, ValidateNested, IsOptional, IsArray, ArrayNotEmpty } from "class-validator";
 import { Type } from "class-transformer";
 
 class VendorProfileDto {
@@ -32,7 +32,14 @@ export class CreateVendorDto {
   email: string;
 
   @IsString()
-  @MinLength(6)
+  @MinLength(8)
+  @IsStrongPassword({
+    minLength: 8,
+    minLowercase: 1,
+    minUppercase: 1,
+    minNumbers: 1,
+    minSymbols: 1,
+  })
   password: string;
 
   @ValidateNested()
