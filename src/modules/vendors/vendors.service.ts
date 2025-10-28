@@ -297,7 +297,7 @@ export class VendorService {
   async getTokens(id: string, email: string) {
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync({ sub: id, email }, {
-        secret: this.configService.get<string>("JWT_ACCESS_SECRET"),
+        secret: this.configService.get<string>("JWT_SECRET"),
         expiresIn: "15m",
       }),
       this.jwtService.signAsync({ sub: id, email }, {

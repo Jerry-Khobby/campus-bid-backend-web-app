@@ -1,6 +1,107 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import { Document } from "mongoose";
 
+/* --------------------------- Subschemas --------------------------- */
+
+// ✅ Profile
+@Schema({ _id: false })
+class Profile {
+  @Prop({ required: true })
+  businessName: string;
+
+  @Prop()
+  ownerName?: string;
+
+  @Prop({ required: true })
+  phoneNumber: string;
+
+  @Prop()
+  description?: string;
+
+  @Prop()
+  logo?: string; // URL
+
+  @Prop()
+  banner?: string; // URL
+}
+
+// ✅ Location (GeoJSON)
+@Schema({ _id: false })
+class Location {
+  @Prop()
+  address?: string;
+
+  @Prop()
+  building?: string;
+
+  @Prop({ type: String, enum: ["Point"], default: "Point" })
+  type: string;
+
+  @Prop({
+    type: [Number], // [longitude, latitude]
+    required: true,
+    default: [0, 0],
+  })
+  coordinates: number[];
+}
+
+// ✅ Business Hours
+@Schema({ _id: false })
+class BusinessHour {
+  @Prop({ required: true })
+  day: string; // e.g., "Monday"
+
+  @Prop()
+  openTime?: string; // e.g., "08:00"
+
+  @Prop()
+  closeTime?: string; // e.g., "22:00"
+
+  @Prop({ default: false })
+  isClosed?: boolean;
+}
+
+// ✅ Rating
+@Schema({ _id: false })
+class Rating {
+  @Prop({ type: Number, default: 0 })
+  average: number;
+
+  @Prop({ type: Number, default: 0 })
+  count: number;
+}
+
+// ✅ Stats
+@Schema({ _id: false })
+class Stats {
+  @Prop({ type: Number, default: 0 })
+  totalOrders: number;
+
+  @Prop({ type: Number, default: 0 })
+  completedOrders: number;
+
+  @Prop({ type: Number, default: 0 })
+  totalRevenue: number;
+}
+
+// ✅ Bank Details
+@Schema({ _id: false })
+class BankDetails {
+  @Prop()
+  accountName?: string;
+
+  @Prop()
+  accountNumber?: string;
+
+  @Prop()
+  bankName?: string;
+
+  @Prop({ default: false })
+  isVerified?: boolean;
+}
+
+/* ----------------------------- Vendor ----------------------------- */
+
 @Schema({ timestamps: true })
 export class Vendor extends Document {
   @Prop({ required: true, unique: true })
@@ -12,122 +113,43 @@ export class Vendor extends Document {
   @Prop({ default: "vendor" })
   role: string;
 
-  // ✅ Profile
-  @Prop({
-    type: {
-      businessName: { type: String, required: true },
-      ownerName: { type: String },
-      phoneNumber: { type: String, required: true },
-      description: { type: String },
-      logo: { type: String }, // URL
-      banner: { type: String }, // URL
-    },
-  })
-  profile: {
-    businessName: string;
-    ownerName?: string;
-    phoneNumber: string;
-    description?: string;
-    logo?: string;
-    banner?: string;
-  };
+  @Prop({ type: Profile, required: true })
+  profile: Profile;
 
-  // ✅ Location (GeoJSON)
-  @Prop({
-    type: {
-      address: { type: String },
-      building: { type: String },
-      type: { type: String, enum: ["Point"], default: "Point" },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-        index: "2dsphere",
-      },
-    },
-  })
-  location: {
-    address?: string;
-    building?: string;
-    type: "Point";
-    coordinates: [number, number];
-  };
+  @Prop({ type: Location, default: { type: "Point", coordinates: [0, 0] } })
+  location: Location;
 
-  // ✅ Business Hours
-  @Prop([{
-    day: { type: String, required: true },
-    openTime: { type: String },
-    closeTime: { type: String },
-    isClosed: { type: Boolean, default: false },
-  }])
-  businessHours: {
-    day: string;
-    openTime?: string;
-    closeTime?: string;
-    isClosed?: boolean;
-  }[];
+  @Prop({ type: [BusinessHour], default: [] })
+  businessHours: BusinessHour[];
 
-  // ✅ Categories
   @Prop({ type: [String], default: [] })
   categories: string[];
 
-  // ✅ Rating
-  @Prop({
-    type: {
-      average: { type: Number, default: 0 },
-      count: { type: Number, default: 0 },
-    },
-    default: {},
-  })
-  rating: {
-    average: number;
-    count: number;
-  };
+  @Prop({ type: Rating, default: () => ({}) })
+  rating: Rating;
 
-  // ✅ Stats
-  @Prop({
-    type: {
-      totalOrders: { type: Number, default: 0 },
-      completedOrders: { type: Number, default: 0 },
-      totalRevenue: { type: Number, default: 0 },
-    },
-    default: {},
-  })
-  stats: {
-    totalOrders: number;
-    completedOrders: number;
-    totalRevenue: number;
-  };
+  @Prop({ type: Stats, default: () => ({}) })
+  stats: Stats;
 
-  // ✅ Bank Details
-  @Prop({
-    type: {
-      accountName: { type: String },
-      accountNumber: { type: String },
-      bankName: { type: String },
-      isVerified: { type: Boolean, default: false },
-    },
-    default: {},
-  })
-  bankDetails: {
-    accountName?: string;
-    accountNumber?: string;
-    bankName?: string;
-    isVerified?: boolean;
-  };
-
-    @Prop({default:null})
-    refreshToken?:string;
+  @Prop({ type: BankDetails, default: () => ({}) })
+  bankDetails: BankDetails;
 
   @Prop({ default: false })
   isVerified: boolean;
+
+  @Prop({default:null})
+  refreshToken?:string;
 
   @Prop({ default: true })
   isActive: boolean;
 }
 
+/* ------------------------- Schema Factory ------------------------- */
+
 export const VendorSchema = SchemaFactory.createForClass(Vendor);
 
-// ✅ Add geospatial index explicitly
-VendorSchema.index({ location: "2dsphere" });
+// ✅ Proper GeoJSON Index (important!)
+VendorSchema.index({ "location.coordinates": "2dsphere" });
 
-// ✅ Add this line (this fixes your error)
+// Type alias
 export type VendorDocument = Vendor & Document;
