@@ -108,7 +108,7 @@ export class UserService {
     await this.cacheManager.set(`user:${email}`, cacheUser, 3600);
 
     // Generate tokens
-    const tokens = await this.getTokens(savedUser._id.toString(), savedUser.email);
+    const tokens = await this.getTokens(savedUser._id.toString(), savedUser.email,savedUser.role);
     await this.updateRefreshToken(savedUser._id.toString(), tokens.refreshToken);
 
     const safeUser = this.excludePassword(savedUser);
@@ -141,7 +141,7 @@ export class UserService {
     if (!isMatch) throw new UnauthorizedException("Invalid email or password");
 
     // Generate tokens
-    const tokens = await this.getTokens(user._id.toString(), user.email);
+    const tokens = await this.getTokens(user._id.toString(), user.email,user.role);
     await this.updateRefreshToken(user._id.toString(), tokens.refreshToken);
 
     // Cache for future
@@ -298,22 +298,22 @@ export class UserService {
     return argon2.hash(data);
   }
 
-  async updateRefreshToken(userId: string, refreshToken: string) {
+  async updateRefreshToken(userId: string, refreshToken: string,) {
     const hashedToken = await this.hashData(refreshToken);
     await this.userModel.findByIdAndUpdate(userId, { refreshToken: hashedToken });
   }
 
-  async getTokens(userId: string, email: string) {
+  async getTokens(userId: string, email: string,role:string) {
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(
-        { sub: userId, email },
+        { sub: userId, email,role },
         {
           secret: this.configService.get<string>("JWT_ACCESS_SECRET"),
           expiresIn: "15m",
         }
       ),
       this.jwtService.signAsync(
-        { sub: userId, email },
+        { sub: userId, email,role },
         {
           secret: this.configService.get<string>("JWT_REFRESH_SECRET"),
           expiresIn: "7d",
@@ -336,7 +336,7 @@ export class UserService {
 
     if (!refreshTokenMatches) throw new ForbiddenException("Access Denied");
 
-    const tokens = await this.getTokens(user.id, user.email);
+    const tokens = await this.getTokens(user.id, user.email,user.role);
     await this.updateRefreshToken(user.id, tokens.refreshToken);
     return tokens;
   }

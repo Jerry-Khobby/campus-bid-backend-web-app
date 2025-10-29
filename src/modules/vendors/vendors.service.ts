@@ -100,7 +100,7 @@ export class VendorService {
     };
     await this.cacheManager.set(`vendor:${email}`, cacheVendor, 3600);
 
-    const { accessToken, refreshToken } = await this.getTokens(vendorId, saved.email);
+    const { accessToken, refreshToken } = await this.getTokens(vendorId, saved.email,vendor.role);
     await this.updateRefreshToken(vendorId, refreshToken);
 
     this.logger.log(`Vendor created: ${email}`);
@@ -121,7 +121,7 @@ export class VendorService {
     if (!valid) throw new UnauthorizedException("Invalid email or password");
 
     const vendorId = (vendor._id as Types.ObjectId).toString();
-    const { accessToken, refreshToken } = await this.getTokens(vendorId, vendor.email);
+    const { accessToken, refreshToken } = await this.getTokens(vendorId, vendor.email,vendor.role);
     await this.updateRefreshToken(vendorId, refreshToken);
 
     await this.cacheManager.set(`vendor:${email}`, { id: vendorId, email }, 3600);
@@ -294,13 +294,13 @@ export class VendorService {
     await this.vendorModel.findByIdAndUpdate(id, { refreshToken: hashed });
   }
 
-  async getTokens(id: string, email: string) {
+  async getTokens(id: string, email: string,role:string) {
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync({ sub: id, email }, {
+      this.jwtService.signAsync({ sub: id, email,role }, {
         secret: this.configService.get<string>("JWT_SECRET"),
         expiresIn: "15m",
       }),
-      this.jwtService.signAsync({ sub: id, email }, {
+      this.jwtService.signAsync({ sub: id, email,role }, {
         secret: this.configService.get<string>("JWT_REFRESH_SECRET"),
         expiresIn: "7d",
       }),
@@ -316,7 +316,7 @@ export class VendorService {
     if (!matches) throw new ForbiddenException("Access Denied");
 
     const vendorId = (vendor._id as Types.ObjectId).toString();
-    const tokens = await this.getTokens(vendorId, vendor.email);
+    const tokens = await this.getTokens(vendorId, vendor.email,vendor.role);
     await this.updateRefreshToken(vendorId, tokens.refreshToken);
     return tokens;
   }
