@@ -9,6 +9,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { UserModule } from './modules/users/user.module';
 import { VendorModule } from './modules/vendors/vendors.module';
 import { ProductsModule } from './modules/products/products.module';
+import { FlashSaleModule } from './modules/flash-sales/flash-sale.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
@@ -17,6 +18,7 @@ import { ProductsModule } from './modules/products/products.module';
     UserModule,
     VendorModule,
     ProductsModule,
+    FlashSaleModule,
 
   ],
   controllers: [AppController],

@@ -13,10 +13,6 @@ import { FlashSaleStatus, FlashSaleReason } from './enums';
 export class BaseFlashSaleDto {
   @IsMongoId()
   @IsNotEmpty()
-  vendorId: Types.ObjectId;
-
-  @IsMongoId()
-  @IsNotEmpty()
   productId: Types.ObjectId;
 
   @IsNumber()

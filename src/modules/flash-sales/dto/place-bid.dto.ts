@@ -6,10 +6,7 @@ export class PlaceBidDto {
   @IsNotEmpty()
   flashSaleId: Types.ObjectId;
 
-  @IsMongoId()
-  @IsNotEmpty()
-  userId: Types.ObjectId;
-
+  
   @IsNumber()
   @Min(0)
   amount: number;

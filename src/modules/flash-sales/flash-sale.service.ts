@@ -39,10 +39,11 @@ export class FlashSaleService {
   // -----------------------
   // CREATE FLASH SALE
   // -----------------------
-  async createFlashSale(dto: CreateFlashSaleDto): Promise<FlashSaleDocument> {
+  async createFlashSale(vendorId:string,dto: CreateFlashSaleDto): Promise<FlashSaleDocument> {
     try {
       const flashSale = new this.flashSaleModel({
         ...dto,
+        vendorId,
         status: FlashSaleStatus.UPCOMING,
       });
 
@@ -124,7 +125,7 @@ export class FlashSaleService {
   // -----------------------
   // PLACE BID (Atomic with Cache)
   // -----------------------
-  async placeBid(dto: PlaceBidDto): Promise<FlashSaleDocument> {
+  async placeBid(userId:string,dto: PlaceBidDto): Promise<FlashSaleDocument> {
     const lockKey = `lock:flash-sale:${dto.flashSaleId}`;
     const cachedLock = await this.cacheManager.get(lockKey);
     if (cachedLock) throw new ForbiddenException('Bid is being processed, try again shortly');
@@ -142,9 +143,9 @@ export class FlashSaleService {
         throw new BadRequestException(`Bid must be at least ${minAllowed}`);
 
       sale.currentBid = dto.amount;
-      sale.currentBidder = new Types.ObjectId(dto.userId);
+      sale.currentBidder = new Types.ObjectId(userId);
       sale.bids.push({
-        userId: new Types.ObjectId(dto.userId),
+        userId: new Types.ObjectId(userId),
         amount: dto.amount,
         timestamp: new Date(),
       });
@@ -152,7 +153,7 @@ export class FlashSaleService {
       const updated = await sale.save();
       await this.cacheManager.set(`flash-sale:${dto.flashSaleId}`, updated, 600);
 
-      this.logger.log(`💰 New bid placed: ${dto.amount} by ${dto.userId} on ${dto.flashSaleId}`);
+      this.logger.log(`💰 New bid placed: ${dto.amount} by ${userId} on ${dto.flashSaleId}`);
       return updated;
     } finally {
       await this.cacheManager.del(lockKey);
@@ -162,9 +163,11 @@ export class FlashSaleService {
   // -----------------------
   // CANCEL FLASH SALE
   // -----------------------
-  async cancelFlashSale(dto: CancelFlashSaleDto): Promise<FlashSaleDocument> {
+  async cancelFlashSale(vendorId: string, dto: CancelFlashSaleDto) {
     const sale = await this.flashSaleModel.findById(dto.flashSaleId);
     if (!sale) throw new NotFoundException('Flash sale not found');
+    if (sale.vendorId.toString() !== vendorId)
+      throw new ForbiddenException('You are not authorized to cancel this flash sale');
 
     if (sale.status === FlashSaleStatus.COMPLETED)
       throw new ConflictException('Cannot cancel a completed flash sale');
@@ -172,19 +175,18 @@ export class FlashSaleService {
     sale.status = FlashSaleStatus.CANCELLED;
     sale.reason = dto.reason;
     const updated = await sale.save();
-
     await this.cacheManager.set(`flash-sale:${dto.flashSaleId}`, updated, 300);
-    this.logger.warn(`⚠️ Flash sale cancelled: ${dto.flashSaleId}`);
-
     return updated;
   }
 
   // -----------------------
   // COMPLETE FLASH SALE
   // -----------------------
-  async completeFlashSale(dto: CompleteFlashSaleDto): Promise<FlashSaleDocument> {
+ async completeFlashSale(vendorId: string, dto: CompleteFlashSaleDto) {
     const sale = await this.flashSaleModel.findById(dto.flashSaleId);
     if (!sale) throw new NotFoundException('Flash sale not found');
+    if (sale.vendorId.toString() !== vendorId)
+      throw new ForbiddenException('You are not authorized to complete this flash sale');
 
     if (sale.status === FlashSaleStatus.COMPLETED)
       throw new ConflictException('Flash sale already completed');
@@ -196,8 +198,6 @@ export class FlashSaleService {
 
     const updated = await sale.save();
     await this.cacheManager.set(`flash-sale:${dto.flashSaleId}`, updated, 300);
-
-    this.logger.log(`🏁 Flash sale completed: ${dto.flashSaleId}, winner: ${dto.winner}`);
     return updated;
   }
 

@@ -1,4 +1,4 @@
-import { IsMongoId, IsNotEmpty, IsString } from 'class-validator';
+import { IsMongoId, IsNotEmpty, IsString,IsOptional } from 'class-validator';
 import { Types } from 'mongoose';
 import { FlashSaleReason } from './enums';
 
