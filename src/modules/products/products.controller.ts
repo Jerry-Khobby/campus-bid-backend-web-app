@@ -37,9 +37,7 @@ export class ProductsController {
   @ApiOperation({ summary: "Create a new product (Vendor only)" })
   @ApiResponse({ status: 201, description: "Product created successfully" })
   async createProduct(@Request() req, @Body() dto: CreateProductDto) {
-    dto.vendorId = req.user.sub;
-    console.log(req.user.sub)
-    const result = await this.productsService.createProduct(dto);
+    const result = await this.productsService.createProduct(dto,req.user.sub);
     return { success: true, message: "Product created successfully", ...result };
   }
 

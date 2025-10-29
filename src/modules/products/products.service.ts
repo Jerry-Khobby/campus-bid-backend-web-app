@@ -60,14 +60,14 @@ export class ProductsService {
   // -----------------------
   // CREATE
   // -----------------------
-  async createProduct(dto: CreateProductDto): Promise<{ product: SafeProduct }> {
+  async createProduct(dto: CreateProductDto,vendorId:string): Promise<{ product: SafeProduct }> {
     // Expect dto.vendorId provided by controller (from auth)
-    if (!dto.vendorId) throw new BadRequestException("vendorId is required");
+    if (!vendorId) throw new BadRequestException("vendorId is required");
 
-    if (!Types.ObjectId.isValid(dto.vendorId)) throw new BadRequestException("Invalid vendorId");
+    if (!Types.ObjectId.isValid(vendorId)) throw new BadRequestException("Invalid vendorId");
 
     const product = new this.productModel({
-      vendorId: new Types.ObjectId(dto.vendorId),
+      vendorId: new Types.ObjectId(vendorId),
       name: dto.name,
       description: dto.description ?? "",
       category: dto.category,

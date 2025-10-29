@@ -29,9 +29,10 @@ class SpecificationsDto {
 }
 
 export class CreateProductDto {
-  @ApiProperty({ description: "Vendor ID", example: "652e1a7e123abc9876def012" })
-  @IsMongoId()
-  vendorId: string;
+  // @ApiProperty({ description: "Vendor ID", example: "652e1a7e123abc9876def012" })
+  // @IsOptional()
+  // @IsMongoId()
+  // vendorId?: string;
 
   @ApiProperty({ example: "Chicken Sandwich" })
   @IsString()
