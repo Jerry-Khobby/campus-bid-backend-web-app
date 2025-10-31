@@ -41,15 +41,17 @@ export class FlashSaleService {
   ) {}
 
 
-@Cron('*/30 * * * * *') // every 30 seconds
-async autoStartFlashSalesJob() {
-  await this.autoStartFlashSales();
-}
+  /// the cron job will come later 
 
-@Cron('0 */4 * * * *') // every minute
-async autoEndFlashSalesJob() {
-  await this.autoEndExpiredSales();
-}
+// @Cron('*/30 * * * * *') // every 30 seconds
+// async autoStartFlashSalesJob() {
+//   await this.autoStartFlashSales();
+// }
+
+// @Cron('0 */4 * * * *') // every minute
+// async autoEndFlashSalesJob() {
+//   await this.autoEndExpiredSales();
+// }
 
   // -----------------------
   // CREATE FLASH SALE
