@@ -23,6 +23,7 @@ import {
   FlashSaleReason,
 } from './dto';
 import { FlashSale, FlashSaleDocument } from './schema/flash-sale.schema';
+import {Cron,CronExpression} from "@nestjs/schedule";
 
 
 
@@ -38,6 +39,13 @@ export class FlashSaleService {
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
   ) {}
+
+
+@Cron(CronExpression.EVERY_MINUTE)
+  async handleFlashSaleLifecycle() {
+    await this.autoStartFlashSales();
+    await this.autoEndExpiredSales();
+  }
 
   // -----------------------
   // CREATE FLASH SALE
@@ -204,6 +212,32 @@ export class FlashSaleService {
     return updated;
   }
 
+
+///--------------------------
+// AUTO-START UPCOMING SALES 
+///
+
+
+  async autoStartFlashSales(): Promise<number> {
+    const now = new Date();
+    const upcoming = await this.flashSaleModel.find({
+      status: FlashSaleStatus.UPCOMING,
+      startTime: { $lte: now },
+    });
+
+    let count = 0;
+    for (const sale of upcoming) {
+      sale.status = FlashSaleStatus.ACTIVE;
+      await sale.save();
+      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300);
+      count++;
+    }
+
+    if (count > 0) this.logger.log(`🚀 Activated ${count} flash sales`);
+    return count;
+  }
+
+
   // -----------------------
   // AUTO-END EXPIRED SALES (cronjob hook)
   // -----------------------
@@ -226,4 +260,6 @@ export class FlashSaleService {
     if (count > 0) this.logger.log(`🕒 Auto-ended ${count} expired flash sales`);
     return count;
   }
+
+
 }

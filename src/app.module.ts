@@ -10,9 +10,11 @@ import { UserModule } from './modules/users/user.module';
 import { VendorModule } from './modules/vendors/vendors.module';
 import { ProductsModule } from './modules/products/products.module';
 import { FlashSaleModule } from './modules/flash-sales/flash-sale.module';
+import { ScheduleModule } from '@nestjs/schedule';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
+    ScheduleModule.forRoot(),
     MongooseModule.forRoot(process.env.MONGODB_URI!),
     CacheModule.registerAsync(RedisOptions),
     UserModule,

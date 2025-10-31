@@ -19,7 +19,7 @@ import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.s
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         global: true,
-        secret: configService.get<string>('JWT_ACCESS_SECRET'),
+        secret: configService.get<string>('JWT_SECRET'),
         signOptions: { expiresIn: '15m' },
       }),
     }),

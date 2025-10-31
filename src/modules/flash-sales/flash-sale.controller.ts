@@ -25,6 +25,8 @@ import {
   FlashSaleQueryDto,
 } from './dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
 
 @ApiTags('Flash Sales')
 @Controller('flash-sale')
@@ -32,7 +34,8 @@ export class FlashSaleController {
   constructor(private readonly flashSaleService: FlashSaleService) {}
 
   // ✅ CREATE FLASH SALE (Vendor only)
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard,RolesGuard)
+  @Roles('vendor')
   @Post('create')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a new flash sale (Vendor only)' })
