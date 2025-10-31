@@ -32,7 +32,7 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles('customer')
+  @Roles('student')
   @Post('create')
   @ApiBearerAuth()
   async createOrder(@Request() req, @Body() dto: CreateOrderDto) {
@@ -79,7 +79,7 @@ export class OrdersController {
   }
 
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles('customer')
+  @Roles('student')
   @Post(':id/cancel')
   @ApiBearerAuth()
   async cancelOrder(@Request() req, @Param('id') id: string, @Body() dto: CancelOrderDto) {
@@ -88,7 +88,7 @@ export class OrdersController {
   }
 
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles('customer')
+  @Roles('student')
   @Post(':id/rate')
   @ApiBearerAuth()
   async rateOrder(@Request() req, @Param('id') id: string, @Body() dto: RateOrderDto) {

@@ -11,6 +11,7 @@ import { VendorModule } from './modules/vendors/vendors.module';
 import { ProductsModule } from './modules/products/products.module';
 import { FlashSaleModule } from './modules/flash-sales/flash-sale.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { OrdersModule } from './modules/orders/orders.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
@@ -21,6 +22,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     VendorModule,
     ProductsModule,
     FlashSaleModule,
+    OrdersModule,
 
   ],
   controllers: [AppController],
