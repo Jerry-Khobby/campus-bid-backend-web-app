@@ -69,7 +69,8 @@ export class FlashSaleController {
   }
 
   // ✅ UPDATE FLASH SALE
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard,RolesGuard)
+  @Roles('vendor')
   @Patch(':id/update')
   @ApiBearerAuth()
   async updateFlashSale(@Param('id') id: string, @Body() dto: UpdateFlashSaleDto) {
@@ -78,7 +79,8 @@ export class FlashSaleController {
   }
 
   // ✅ PLACE BID
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard,RolesGuard)
+  @Roles('student')
   @Post('place-bid')
   @ApiBearerAuth()
   async placeBid(@Request() req, @Body() dto: PlaceBidDto) {
@@ -88,7 +90,8 @@ export class FlashSaleController {
   }
 
   // ✅ CANCEL FLASH SALE
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard,RolesGuard)
+  @Roles('vendor')
   @Post('cancel')
   @ApiBearerAuth()
   async cancelFlashSale(@Request() req, @Body() dto: CancelFlashSaleDto) {
@@ -98,7 +101,8 @@ export class FlashSaleController {
   }
 
   // ✅ COMPLETE FLASH SALE
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard,RolesGuard)
+  @Roles('vendor')
   @Post('complete')
   @ApiBearerAuth()
   async completeFlashSale(@Request() req, @Body() dto: CompleteFlashSaleDto) {

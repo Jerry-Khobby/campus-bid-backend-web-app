@@ -308,7 +308,7 @@ export class UserService {
       this.jwtService.signAsync(
         { sub: userId, email,role },
         {
-          secret: this.configService.get<string>("JWT_ACCESS_SECRET"),
+          secret: this.configService.get<string>("JWT_SECRET"),
           expiresIn: "15m",
         }
       ),

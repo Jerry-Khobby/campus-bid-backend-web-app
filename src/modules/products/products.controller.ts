@@ -24,6 +24,8 @@ import { UpdatePriceDto } from "./dto/update-price.dto";
 import { FilterProductDto } from "./dto/filter-product.dto";
 import { ProductRatingDto } from "./dto/product-rating.dto";
 import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
+import { Roles } from "src/common/decorators/roles.decorator";
+import { RolesGuard } from "src/common/guards/roles.guard";
 
 @ApiTags("Products")
 @Controller("products")
@@ -31,18 +33,20 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   // ✅ CREATE PRODUCT (Vendor only)
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
   @Post("create")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Create a new product (Vendor only)" })
   @ApiResponse({ status: 201, description: "Product created successfully" })
   async createProduct(@Request() req, @Body() dto: CreateProductDto) {
-    const result = await this.productsService.createProduct(dto,req.user.sub);
+    const result = await this.productsService.createProduct(dto, req.user.sub);
     return { success: true, message: "Product created successfully", ...result };
   }
 
   // ✅ UPDATE PRODUCT (Vendor only)
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
   @Patch(":id/update")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update an existing product (Vendor only)" })
@@ -52,11 +56,15 @@ export class ProductsController {
     @Request() req,
     @Body() dto: UpdateProductDto
   ) {
-    const product = await this.productsService.updateProduct(productId, req.user.sub, dto);
+    const product = await this.productsService.updateProduct(
+      productId,
+      req.user.sub,
+      dto
+    );
     return { success: true, message: "Product updated successfully", product };
   }
 
-  // ✅ GET SINGLE PRODUCT
+  // ✅ GET SINGLE PRODUCT (Public)
   @Get(":id")
   @ApiOperation({ summary: "Get product by ID" })
   @ApiResponse({ status: 200, description: "Product fetched successfully" })
@@ -65,7 +73,7 @@ export class ProductsController {
     return { success: true, message: "Product fetched successfully", product };
   }
 
-  // ✅ LIST / FILTER / PAGINATE PRODUCTS
+  // ✅ LIST / FILTER / PAGINATE PRODUCTS (Public)
   @Get()
   @ApiOperation({ summary: "List or search products with filters" })
   @ApiResponse({ status: 200, description: "Products fetched successfully" })
@@ -75,7 +83,8 @@ export class ProductsController {
   }
 
   // ✅ UPDATE STOCK (Vendor only)
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
   @Post("update-stock")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update product stock (Vendor only)" })
@@ -86,7 +95,8 @@ export class ProductsController {
   }
 
   // ✅ UPDATE PRICE (Vendor only)
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
   @Post("update-price")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update product price (Vendor only)" })
@@ -96,7 +106,7 @@ export class ProductsController {
     return { success: true, message: "Price updated successfully", ...result };
   }
 
-  // ✅ RATE PRODUCT
+  // ✅ RATE PRODUCT (Student or Public)
   @Post("rate")
   @ApiOperation({ summary: "Rate a product (1–5 stars)" })
   @ApiResponse({ status: 200, description: "Product rated successfully" })
@@ -106,7 +116,8 @@ export class ProductsController {
   }
 
   // ✅ DELETE PRODUCT (Vendor only)
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
   @Delete(":id")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Delete product (Vendor only)" })
