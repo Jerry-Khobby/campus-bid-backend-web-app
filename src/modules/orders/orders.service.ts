@@ -15,12 +15,16 @@ import type { Cache } from 'cache-manager';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
-import { UpdateOrderStatusDto } from './dto/update-order-status.dto.';
 import { CancelOrderDto } from './dto/cancel-order.dto';
 import { RateOrderDto } from './dto/rate-order.dto';
 import { OrderQueryDto } from './dto/order-query.dto';
 import { Order, OrderDocument } from './schema/order.schema';
 import { OrderStatus } from './dto/order-status.enum';
+
+// Import dependent schemas
+import { User,UserDocument } from '../users/schema/user.schema';
+import { Product,ProductDocument } from '../products/schema/product.schema';
+import { Vendor,VendorDocument } from '../vendors/schema/vendor.schema';
 
 @Injectable()
 export class OrdersService {
@@ -29,7 +33,11 @@ export class OrdersService {
   constructor(
     @InjectModel(Order.name)
     private readonly orderModel: Model<OrderDocument>,
-
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
+    @InjectModel(Product.name)
+    private readonly productModel: Model<ProductDocument>,
+    @InjectModel(Vendor.name) private readonly vendorModel:Model<VendorDocument>,
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
   ) {}
@@ -39,7 +47,35 @@ export class OrdersService {
   // -------------------------
   async createOrder(customerId: string, dto: CreateOrderDto): Promise<OrderDocument> {
     try {
+      // ✅ 1. Verify customer exists
+      const customer = await this.userModel.findById(customerId);
+      if (!customer) throw new ForbiddenException('Invalid customer account');
+
+      // ✅ 2. Validate vendor
+      if (!dto.vendorId) throw new BadRequestException('Vendor ID is required');
+      const vendor = await this.vendorModel.findById(dto.vendorId);
+      if (!vendor || vendor.role !== 'vendor')
+        throw new BadRequestException('Invalid vendor ID provided');
+
+      // ✅ 3. Validate products
+      const productIds = dto.items.map((i) => i.productId);
+      const products = await this.productModel.find({ _id: { $in: productIds } });
+      if (products.length !== dto.items.length)
+        throw new BadRequestException('One or more products do not exist');
+
+      // ✅ 4. Verify product ownership (vendor)
+      for (const product of products) {
+        if (product.vendorId.toString() !== vendor._id.toString()) {
+          throw new ForbiddenException(
+            `Product ${product.name} does not belong to the selected vendor`,
+          );
+        }
+      }
+
+      // ✅ 5. Generate order number
       const orderNumber = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+      // ✅ 6. Create order
       const order = new this.orderModel({
         ...dto,
         orderNumber,
@@ -53,7 +89,7 @@ export class OrdersService {
       const saved = await order.save();
       await this.cacheManager.set(`order:${saved._id}`, saved, 600);
 
-      this.logger.log(`🛒 New order created: ${orderNumber}`);
+      this.logger.log(`🛒 Order created by ${customer.email} for vendor ${vendor.email}`);
       return saved;
     } catch (error) {
       this.logger.error('❌ Error creating order', error);
@@ -64,8 +100,8 @@ export class OrdersService {
   // -------------------------
   // GET ALL ORDERS (Role-based)
   // -------------------------
-  async getOrders(customerId: string, role: string, query: OrderQueryDto) {
-    const cacheKey = `orders:${role}:${customerId}:${JSON.stringify(query)}`;
+  async getOrders(userId: string, role: string, query: OrderQueryDto) {
+    const cacheKey = `orders:${role}:${userId}:${JSON.stringify(query)}`;
     const cached = await this.cacheManager.get<OrderDocument[]>(cacheKey);
     if (cached) {
       this.logger.log('💾 Returning cached orders');
@@ -73,13 +109,13 @@ export class OrdersService {
     }
 
     const filter: any = {};
-    if (role === 'student') filter.customerId = customerId;
-    if (role === 'vendor') filter.vendorId = customerId;
+    if (role === 'student') filter.customerId = userId;
+    if (role === 'vendor') filter.vendorId = userId;
     if (query.status) filter.status = query.status;
 
     const orders = await this.orderModel
       .find(filter)
-      .populate('userId vendorId items.productId paymentId', '-password')
+      .populate('customerId vendorId items.productId', '-password')
       .sort({ createdAt: -1 })
       .exec();
 
@@ -90,30 +126,30 @@ export class OrdersService {
   // -------------------------
   // GET SINGLE ORDER
   // -------------------------
-  async getOrderById(orderId: string, customerId: string, role: string): Promise<OrderDocument> {
+  async getOrderById(orderId: string, userId: string, role: string): Promise<OrderDocument> {
     const cacheKey = `order:${orderId}`;
     const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
     if (cached) return cached;
 
     const order = await this.orderModel
       .findById(orderId)
-      .populate('userId vendorId items.productId paymentId', '-password')
+      .populate('customerId vendorId items.productId', '-password')
       .exec();
 
     if (!order) throw new NotFoundException('Order not found');
 
     // Restrict access
-    if (role === 'student' && order.customerId.toString() !== customerId)
-      throw new ForbiddenException('You are not authorized to view this order');
-    if (role === 'vendor' && order.vendorId.toString() !== customerId)
-      throw new ForbiddenException('You are not authorized to view this order');
+    if (role === 'student' && order.customerId.toString() !== userId)
+      throw new ForbiddenException('Unauthorized access');
+    if (role === 'vendor' && order.vendorId.toString() !== userId)
+      throw new ForbiddenException('Unauthorized access');
 
     await this.cacheManager.set(cacheKey, order, 300);
     return order;
   }
 
   // -------------------------
-  // UPDATE ORDER
+  // UPDATE ORDER (Vendor Only)
   // -------------------------
   async updateOrder(orderId: string, dto: UpdateOrderDto): Promise<OrderDocument> {
     const order = await this.orderModel.findById(orderId);
@@ -128,7 +164,7 @@ export class OrdersService {
   }
 
   // -------------------------
-  // UPDATE STATUS
+  // UPDATE STATUS (Vendor/Admin)
   // -------------------------
   async updateOrderStatus(orderId: string, status: OrderStatus): Promise<OrderDocument> {
     const order = await this.orderModel.findById(orderId);
@@ -156,9 +192,7 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
     if (order.customerId.toString() !== customerId)
       throw new ForbiddenException('You can only cancel your own orders');
-    if (
-      [OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.REFUNDED].includes(order.status as OrderStatus)
-    )
+    if ([OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.REFUNDED].includes(order.status as OrderStatus))
       throw new ConflictException('Cannot cancel this order');
 
     order.status = OrderStatus.CANCELLED;
@@ -201,7 +235,7 @@ export class OrdersService {
   }
 
   // -------------------------
-  // AUTO-COMPLETE DELIVERED ORDERS (Cron / Admin)
+  // AUTO-COMPLETE DELIVERED ORDERS
   // -------------------------
   async autoCompleteDeliveredOrders(): Promise<number> {
     const delivered = await this.orderModel.find({

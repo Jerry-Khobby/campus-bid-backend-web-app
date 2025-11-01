@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
-import { Document } from "mongoose";
+import { Document,Types } from "mongoose";
 
 /* --------------------------- Subschemas --------------------------- */
 
@@ -152,4 +152,4 @@ export const VendorSchema = SchemaFactory.createForClass(Vendor);
 VendorSchema.index({ "location.coordinates": "2dsphere" });
 
 // Type alias
-export type VendorDocument = Vendor & Document;
+export type VendorDocument = Vendor & Document & {_id:Types.ObjectId};

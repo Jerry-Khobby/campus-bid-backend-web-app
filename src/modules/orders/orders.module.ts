@@ -8,13 +8,19 @@ import { ConfigModule,ConfigService } from "@nestjs/config";
 import { JwtModule } from "@nestjs/jwt";
 import { CacheModule } from "@nestjs/cache-manager";
 import { OrderSchema,Order } from "./schema/order.schema";
-
+import { Product,ProductSchema } from "../products/schema/product.schema";
+import { User,UserSchema } from "../users/schema/user.schema";
+import { Vendor,VendorSchema } from "../vendors/schema/vendor.schema";
 
 @Module({
 
     imports: [
       MongooseModule.forFeature([
         { name: Order.name, schema: OrderSchema },
+        {name:Product.name,schema:ProductSchema},
+        {name:User.name,schema:UserSchema},
+        {name:Vendor.name,schema:VendorSchema},
+
       ]),
       CacheModule.register(),
       JwtModule.registerAsync({
