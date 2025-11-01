@@ -64,8 +64,8 @@ export class OrdersService {
   // -------------------------
   // GET ALL ORDERS (Role-based)
   // -------------------------
-  async getOrders(userId: string, role: string, query: OrderQueryDto) {
-    const cacheKey = `orders:${role}:${userId}:${JSON.stringify(query)}`;
+  async getOrders(customerId: string, role: string, query: OrderQueryDto) {
+    const cacheKey = `orders:${role}:${customerId}:${JSON.stringify(query)}`;
     const cached = await this.cacheManager.get<OrderDocument[]>(cacheKey);
     if (cached) {
       this.logger.log('💾 Returning cached orders');
@@ -73,13 +73,13 @@ export class OrdersService {
     }
 
     const filter: any = {};
-    if (role === 'customer') filter.customerId = userId;
-    if (role === 'vendor') filter.vendorId = userId;
+    if (role === 'student') filter.customerId = customerId;
+    if (role === 'vendor') filter.vendorId = customerId;
     if (query.status) filter.status = query.status;
 
     const orders = await this.orderModel
       .find(filter)
-      .populate('customerId vendorId items.productId paymentId', '-password')
+      .populate('userId vendorId items.productId paymentId', '-password')
       .sort({ createdAt: -1 })
       .exec();
 
@@ -90,22 +90,22 @@ export class OrdersService {
   // -------------------------
   // GET SINGLE ORDER
   // -------------------------
-  async getOrderById(orderId: string, userId: string, role: string): Promise<OrderDocument> {
+  async getOrderById(orderId: string, customerId: string, role: string): Promise<OrderDocument> {
     const cacheKey = `order:${orderId}`;
     const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
     if (cached) return cached;
 
     const order = await this.orderModel
       .findById(orderId)
-      .populate('customerId vendorId items.productId paymentId', '-password')
+      .populate('userId vendorId items.productId paymentId', '-password')
       .exec();
 
     if (!order) throw new NotFoundException('Order not found');
 
     // Restrict access
-    if (role === 'customer' && order.customerId.toString() !== userId)
+    if (role === 'student' && order.customerId.toString() !== customerId)
       throw new ForbiddenException('You are not authorized to view this order');
-    if (role === 'vendor' && order.vendorId.toString() !== userId)
+    if (role === 'vendor' && order.vendorId.toString() !== customerId)
       throw new ForbiddenException('You are not authorized to view this order');
 
     await this.cacheManager.set(cacheKey, order, 300);

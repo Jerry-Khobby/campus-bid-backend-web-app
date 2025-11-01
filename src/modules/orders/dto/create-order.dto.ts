@@ -6,9 +6,6 @@ import { PricingDto } from './subdocuments/pricing.dto';
 import { DeliveryAddressDto } from './subdocuments/delivery-address.dto';
 
 export class CreateOrderDto {
-  @ApiProperty()
-  @IsMongoId()
-  customerId: string;
 
   @ApiProperty()
   @IsMongoId()
