@@ -84,6 +84,7 @@ export class Order {
     room?: string;
     location: { type: 'Point'; coordinates: [number, number] };
     instructions?: string;
+    
   };
 
   @Prop({

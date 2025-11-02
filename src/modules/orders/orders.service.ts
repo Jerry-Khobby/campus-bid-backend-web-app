@@ -126,27 +126,40 @@ export class OrdersService {
   // -------------------------
   // GET SINGLE ORDER
   // -------------------------
-  async getOrderById(orderId: string, userId: string, role: string): Promise<OrderDocument> {
-    const cacheKey = `order:${orderId}`;
-    const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
-    if (cached) return cached;
-
-    const order = await this.orderModel
-      .findById(orderId)
-      .populate('customerId vendorId items.productId', '-password')
-      .exec();
-
-    if (!order) throw new NotFoundException('Order not found');
-
-    // Restrict access
-    if (role === 'student' && order.customerId.toString() !== userId)
-      throw new ForbiddenException('Unauthorized access');
-    if (role === 'vendor' && order.vendorId.toString() !== userId)
-      throw new ForbiddenException('Unauthorized access');
-
-    await this.cacheManager.set(cacheKey, order, 300);
-    return order;
+async getOrderById(orderId: string, userId: string, role: string): Promise<OrderDocument> {
+  if (!Types.ObjectId.isValid(orderId)) {
+    throw new BadRequestException('Invalid order ID');
   }
+
+  const cacheKey = `order:${orderId}`;
+  const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
+  if (cached) return cached;
+
+  // ✅ Use lean() for faster check
+  const orderLean = await this.orderModel.findById(orderId).lean().exec();
+  if (!orderLean) throw new NotFoundException('Order not found');
+
+  // ✅ Check authorization with ObjectIds
+  if (role === 'student' && orderLean.customerId.toString() !== userId) {
+    throw new ForbiddenException('Unauthorized access');
+  }
+  if (role === 'vendor' && orderLean.vendorId.toString() !== userId) {
+    throw new ForbiddenException('Unauthorized access');
+  }
+
+  // ✅ Now fetch with populate
+  const order = await this.orderModel
+    .findById(orderId)
+    .populate('customerId vendorId items.productId', '-password')
+    .exec();
+
+    if(!order){
+      throw new NotFoundException("Order not found");
+    }
+
+  await this.cacheManager.set(cacheKey, order, 300);
+  return order;
+}
 
   // -------------------------
   // UPDATE ORDER (Vendor Only)
