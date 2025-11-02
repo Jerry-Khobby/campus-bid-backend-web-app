@@ -1,10 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsMongoId, IsNotEmpty, IsString } from 'class-validator';
+import { IsMongoId, IsNotEmpty, IsString,IsOptional } from 'class-validator';
 
 export class CancelOrderDto {
-  @ApiProperty()
-  @IsMongoId()
-  orderId: string;
 
   @ApiProperty()
   @IsString()
