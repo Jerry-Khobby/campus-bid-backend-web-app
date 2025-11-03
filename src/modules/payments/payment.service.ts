@@ -105,22 +105,49 @@ export class PaymentsService {
   // -----------------------------
   // RELEASE PAYMENT (customer confirms)
   // -----------------------------
-  async releasePayment(paymentId: string, actorId: string): Promise<PaymentDocument> {
-    const payment = await this.findById(paymentId);
+// -----------------------------
+// RELEASE PAYMENT (customer confirms)
+// -----------------------------
+async releasePayment(paymentId: string, actorId: string): Promise<PaymentDocument> {
+  const payment = await this.findById(paymentId);
 
-    if (payment.customerId.toString() !== actorId)
-      throw new ForbiddenException('You cannot release this payment');
+  if (payment.customerId.toString() !== actorId)
+    throw new ForbiddenException('You cannot release this payment');
 
-    if (payment.status !== 'held')
-      throw new ConflictException('Payment cannot be released in current state');
+  if (payment.status !== 'held')
+    throw new ConflictException('Payment cannot be released in current state');
 
-    payment.status = 'released';
-    payment.releaseTime = new Date();
-    await payment.save();
+  // Commission logic
+  const ADMIN_PERCENTAGE = 0.1; // 10%
+  const adminCommission = payment.amount * ADMIN_PERCENTAGE;
+  const vendorPayout = payment.amount - adminCommission;
 
-    this.logger.log(`Payment ${payment._id} released to vendor ${payment.vendorId}`);
-    return payment;
-  }
+  payment.status = 'released';
+  payment.releaseTime = new Date();
+  payment.adminCommission = adminCommission;
+  payment.vendorPayout = vendorPayout;
+
+  // Optional: Add a record for tracking release
+  payment.metadata = {
+    ...(payment.metadata || {}),
+    releasedBy: actorId,
+    releasedAt: new Date(),
+    adminCommission,
+    vendorPayout,
+  };
+
+  await payment.save();
+
+  this.logger.log(
+    `Payment ${payment._id} released: Admin gets ${adminCommission}, Vendor gets ${vendorPayout}`,
+  );
+
+  // 🔜 (Future) — If you integrate Paystack/Stripe later:
+  // await this.gatewayService.sendPayoutToVendor(payment.vendorId, vendorPayout);
+
+  return payment;
+}
+
 
   // -----------------------------
   // REFUND PAYMENT

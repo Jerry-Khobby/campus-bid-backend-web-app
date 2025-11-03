@@ -34,6 +34,13 @@ export class Payment {
   @Prop({ type: String, unique: true })
   transactionId: string;
 
+  @Prop({ type: Number, default: 0 })
+adminCommission: number;
+
+@Prop({ type: Number, default: 0 })
+vendorPayout: number;
+
+
   @Prop() gatewayReference?: string;
 
   @Prop({ type: Object }) gatewayResponse?: Record<string, any>;
