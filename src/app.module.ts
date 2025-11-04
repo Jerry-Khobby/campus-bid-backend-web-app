@@ -12,6 +12,8 @@ import { ProductsModule } from './modules/products/products.module';
 import { FlashSaleModule } from './modules/flash-sales/flash-sale.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { OrdersModule } from './modules/orders/orders.module';
+import { ChatModule } from './modules/chat/chat.module';
+import { PaymentsModule } from './modules/payments/payment.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
@@ -23,7 +25,8 @@ import { OrdersModule } from './modules/orders/orders.module';
     ProductsModule,
     FlashSaleModule,
     OrdersModule,
-
+    ChatModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService,{
