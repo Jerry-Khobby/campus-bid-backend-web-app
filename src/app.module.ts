@@ -14,6 +14,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { OrdersModule } from './modules/orders/orders.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { PaymentsModule } from './modules/payments/payment.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
@@ -27,6 +28,7 @@ import { PaymentsModule } from './modules/payments/payment.module';
     OrdersModule,
     ChatModule,
     PaymentsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService,{
