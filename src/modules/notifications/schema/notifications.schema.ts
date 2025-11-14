@@ -36,5 +36,6 @@ export class Notification {
 
 export const NotificationSchema = SchemaFactory.createForClass(Notification);
 
-// Index for querying user's notifications efficiently
 NotificationSchema.index({ userId: 1, createdAt: -1 });
+NotificationSchema.index({ userType: 1 });
+
