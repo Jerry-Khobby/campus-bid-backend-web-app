@@ -6,103 +6,72 @@ import {
   Param,
   Query,
   Patch,
+  UseGuards,
+  Request,
 } from '@nestjs/common';
-import { ChatService } from './chat.service';
 import {
   ApiTags,
+  ApiBearerAuth,
   ApiOperation,
-  ApiParam,
-  ApiQuery,
-  ApiBody,
-  ApiOkResponse,
-  ApiCreatedResponse,
+  ApiResponse,
 } from '@nestjs/swagger';
+import { ChatService } from './chat.service';
+import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 
 @ApiTags('Chat')
+@ApiBearerAuth()
+@UseGuards(AccessTokenGuard) // 👈 protect entire controller
 @Controller('chat')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
-  // ---------------------------
-  // CREATE OR GET CONVERSATION
-  // ---------------------------
   @Post('conversation')
-  @ApiOperation({ summary: 'Get or create a conversation between customer & vendor' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        customerId: { type: 'string' },
-        vendorId: { type: 'string' },
-        orderId: { type: 'string', nullable: true },
-      },
-      required: ['customerId', 'vendorId'],
-    },
-  })
-  @ApiCreatedResponse({ description: 'Conversation returned or newly created.' })
-  getOrCreateConversation(
-    @Body()
-    body: {
-      customerId: string;
-      vendorId: string;
-      orderId?: string;
-    },
+  @ApiOperation({ summary: 'Get or create chat conversation between customer and vendor' })
+  async getOrCreateConversation(
+    @Request() req,
+    @Body() body: { vendorId: string; orderId?: string },
   ) {
-    return this.chatService.getOrCreateConversation(
-      body.customerId,
+    const customerId = req.user.sub; // always from token
+    const result = await this.chatService.getOrCreateConversation(
+      customerId,
       body.vendorId,
       body.orderId,
     );
+    return { success: true, message: 'Conversation ready', data: result };
   }
 
-  // ---------------------------
-  // GET CONVERSATION BY ID
-  // ---------------------------
   @Get('conversation/:id')
-  @ApiOperation({ summary: 'Fetch a conversation by ID' })
-  @ApiParam({ name: 'id', type: 'string', description: 'Conversation ID' })
-  @ApiOkResponse({ description: 'Conversation details returned.' })
-  getConversation(@Param('id') id: string) {
-    return this.chatService.getConversationById(id);
+  @ApiOperation({ summary: 'Fetch conversation by ID' })
+  async getConversation(@Param('id') id: string) {
+    return {
+      success: true,
+      data: await this.chatService.getConversationById(id),
+    };
   }
 
-  // ---------------------------
-  // GET MESSAGES
-  // ---------------------------
   @Get('messages/:conversationId')
-  @ApiOperation({ summary: 'Get messages for a conversation with pagination' })
-  @ApiParam({ name: 'conversationId', type: 'string', description: 'Conversation ID' })
-  @ApiQuery({ name: 'skip', type: 'number', required: false })
-  @ApiQuery({ name: 'limit', type: 'number', required: false })
-  @ApiOkResponse({ description: 'Messages list returned.' })
-  getMessages(
+  @ApiOperation({ summary: 'Get paginated messages' })
+  async getMessages(
     @Param('conversationId') conversationId: string,
     @Query('skip') skip = 0,
     @Query('limit') limit = 30,
   ) {
-    return this.chatService.getMessages(conversationId, Number(limit), Number(skip));
+    const data = await this.chatService.getMessages(
+      conversationId,
+      Number(limit),
+      Number(skip),
+    );
+    return { success: true, data };
   }
 
-  // ---------------------------
-  // MARK AS READ
-  // ---------------------------
   @Patch('read/:conversationId')
-  @ApiOperation({ summary: 'Mark all messages in conversation as read for a user type' })
-  @ApiParam({ name: 'conversationId', type: 'string' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        userType: { type: 'string', enum: ['customer', 'vendor'] },
-      },
-      required: ['userType'],
-    },
-  })
-  @ApiOkResponse({ description: 'Messages marked as read.' })
-  markAsRead(
+  @ApiOperation({ summary: 'Mark messages as read' })
+  async markAsRead(
+    @Request() req,
     @Param('conversationId') conversationId: string,
-    @Body('userType') userType: 'customer' | 'vendor',
   ) {
-    return this.chatService.markAsRead(conversationId, userType);
+    const userType = req.user.role === 'vendor' ? 'vendor' : 'customer';
+    await this.chatService.markAsRead(conversationId, userType);
+    return { success: true, message: 'Marked as read' };
   }
 }

@@ -1,51 +1,37 @@
-import { Controller, Get, Patch, Post, Body, Param } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiParam, ApiBody } from '@nestjs/swagger';
-
+import { Controller, Get, Patch, Post, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { CreateNotificationDto } from './dto/create-notifications.dto';
 import { MarkAsReadDto } from './dto/mark-as-read.dto';
+import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 
 @ApiTags('Notifications')
+@ApiBearerAuth()
+@UseGuards(AccessTokenGuard)
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly service: NotificationsService) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Create a notification',
-    description: 'Creates a new notification for a user (customer or vendor). Usually called internally (order updates, messages, etc).',
-  })
-  @ApiBody({ type: CreateNotificationDto })
+  @ApiOperation({ summary: 'Create a notification (system use)' })
   create(@Body() dto: CreateNotificationDto) {
     return this.service.create(dto);
   }
 
   @Get(':userId')
-  @ApiOperation({
-    summary: 'Get user notifications',
-    description: 'Returns all notifications for the provided user.',
-  })
-  @ApiParam({ name: 'userId', description: 'ID of user to fetch notifications for' })
+  @ApiOperation({ summary: 'Get all notifications for a user' })
   list(@Param('userId') userId: string) {
     return this.service.listUserNotifications(userId);
   }
 
   @Get(':userId/unread-count')
-  @ApiOperation({
-    summary: 'Get unread notification count',
-    description: 'Returns the number of unread notifications for the user.',
-  })
-  @ApiParam({ name: 'userId', description: 'User ID to get unread count for' })
+  @ApiOperation({ summary: 'Get unread notification count for a user' })
   getUnreadCount(@Param('userId') userId: string) {
     return this.service.getUnreadCount(userId);
   }
 
   @Patch('read')
-  @ApiOperation({
-    summary: 'Mark notifications as read',
-    description: 'Marks all notifications (or specific ones) as read for a user.',
-  })
-  @ApiBody({ type: MarkAsReadDto })
+  @ApiOperation({ summary: 'Mark notifications as read' })
   markAsRead(@Body() dto: MarkAsReadDto) {
     return this.service.markAsRead(dto);
   }

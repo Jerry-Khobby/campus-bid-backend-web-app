@@ -4,7 +4,7 @@ import { Model, Types } from 'mongoose';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 
-import { NotificationSchema,NotificationDocument } from './schema/notifications.schema';
+import { Notification,NotificationDocument } from './schema/notifications.schema';
 import { CreateNotificationDto } from './dto/create-notifications.dto';
 import { MarkAsReadDto } from './dto/mark-as-read.dto';
 
