@@ -8,6 +8,7 @@ import { RefreshTokenStrategy } from 'src/common/guards/strategies/refresh-token
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { CacheModule } from '@nestjs/cache-manager';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { CacheModule } from '@nestjs/cache-manager';
       { name: FlashSale.name, schema: FlashSaleSchema },
     ]),
     CacheModule.register(),
+    NotificationsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

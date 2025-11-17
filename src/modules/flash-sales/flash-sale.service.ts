@@ -24,6 +24,12 @@ import {
 } from './dto';
 import { FlashSale, FlashSaleDocument } from './schema/flash-sale.schema';
 import {Cron,CronExpression} from "@nestjs/schedule";
+import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
+
+
+
+
 
 
 
@@ -38,6 +44,9 @@ export class FlashSaleService {
     private readonly flashSaleModel: Model<FlashSaleDocument>,
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
+
+    private readonly notificationGateway:NotificationsGateway,
+    private readonly notificationsService:NotificationsService,
   ) {}
 
 
