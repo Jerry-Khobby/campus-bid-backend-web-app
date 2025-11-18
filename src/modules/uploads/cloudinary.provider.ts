@@ -11,6 +11,6 @@ export const CloudinaryProvider = {
       api_secret: 'Your api secret',
     });
 
-    return cloudinary; // TypeScript now accepts this
+    return cloudinary;
   },
 };
