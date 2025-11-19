@@ -27,6 +27,8 @@ import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
+import {FileInterceptor} from "@nestjs/platform-express";
+import { UploadedFile,UseInterceptors } from "@nestjs/common";
 
 @ApiTags("Vendors")
 @Controller("vendors")
@@ -35,10 +37,13 @@ export class VendorController {
 
   // ✅ REGISTER (Public)
   @Post("register")
+    @UseInterceptors(FileInterceptor('logo'))
   @ApiOperation({ summary: "Register a new vendor account" })
   @ApiResponse({ status: 201, description: "Vendor registered successfully" })
-  async register(@Body() dto: CreateVendorDto) {
-    const result = await this.vendorService.createVendor(dto);
+  async register(
+    @UploadedFile() logo: Express.Multer.File,
+    @Body() dto: CreateVendorDto) {
+    const result = await this.vendorService.createVendor(dto,logo);
     return {
       success: true,
       message: "Vendor registered successfully",
@@ -73,11 +78,14 @@ export class VendorController {
   // ✅ UPDATE PROFILE (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
+  @UseInterceptors(FileInterceptor("logo"))
   @Post("update-profile")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update vendor profile details" })
-  async updateProfile(@Request() req, @Body() dto: UpdateProfileDto) {
-    const vendor = await this.vendorService.updateProfile(req.user.sub, dto);
+  async updateProfile(@Request() req,
+    @UploadedFile() logo: Express.Multer.File,
+  @Body() dto: UpdateProfileDto) {
+    const vendor = await this.vendorService.updateProfile(req.user.sub, dto,logo);
     return { success: true, message: "Profile updated successfully", vendor };
   }
 

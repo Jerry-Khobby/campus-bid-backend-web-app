@@ -29,6 +29,7 @@ import { ResetPasswordDto } from "../users/dto/reset-password.dto";
 import { MailService } from "src/utils/mail.service";
 import * as argon2 from "argon2";
 import { ConfigService } from "@nestjs/config";
+import { CloudinaryService } from "../uploads/cloudinary.service";
 
 interface CacheVendor {
   id: string;
@@ -62,13 +63,15 @@ export class VendorService {
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   // -----------------------
   // REGISTER VENDOR
   // -----------------------
   async createVendor(
-    dto: CreateVendorDto
+    dto: CreateVendorDto,
+    logo?: Express.Multer.File
   ): Promise<{ vendor: SafeVendor; accessToken: string; refreshToken: string }> {
     const email = dto.email.trim().toLowerCase();
 
@@ -77,11 +80,23 @@ export class VendorService {
 
     const hashedPassword = await bcrypt.hash(dto.password, this.SALT_ROUNDS);
 
+    
+  let profileImageUrl = null;
+
+  //  Upload to Cloudinary if file was included
+  if (logo) {
+    const uploaded = await this.cloudinaryService.uploadImage(logo);
+    profileImageUrl = uploaded.secure_url;
+  }
     const vendor = new this.vendorModel({
       ...dto,
       email,
       password: hashedPassword,
       role: "vendor",
+      profile: {
+        ...dto.profile,
+        logo: profileImageUrl || dto.profile.logo,
+      },
     });
 
     let saved: VendorDocument;
@@ -142,19 +157,51 @@ export class VendorService {
   // -----------------------
   // UPDATE PROFILE
   // -----------------------
-  async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
-    const vendor = await this.vendorModel.findById(id);
-    if (!vendor) throw new NotFoundException("Vendor not found");
+async updateProfile(
+  id: string,
+  dto: UpdateProfileDto,
+  logo?: Express.Multer.File
+): Promise<SafeVendor> {
+  const vendor = await this.vendorModel.findById(id);
+  if (!vendor) throw new NotFoundException("Vendor not found");
 
-    vendor.profile = { ...vendor.profile, ...dto };
-    await vendor.save();
+  // 1️⃣ CLOUDINARY UPLOAD
+  let uploadedLogoUrl = null;
 
-    const vendorId = (vendor._id as Types.ObjectId).toString();
-    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
-
-    this.logger.log(`Vendor profile updated: ${vendor.email}`);
-    return this.excludePassword(vendor);
+  if (logo) {
+    const uploaded = await this.cloudinaryService.uploadImage(logo);
+    uploadedLogoUrl = uploaded.secure_url;
   }
+
+  // 2️⃣ MERGE OTHER PROFILE FIELDS
+  if (dto) {
+    vendor.profile = {
+      ...vendor.profile,
+      ...dto,
+    };
+  }
+
+  // 3️⃣ REPLACE LOGO ONLY IF NEW FILE WAS UPLOADED
+  if (uploadedLogoUrl) {
+    vendor.profile.logo = uploadedLogoUrl;
+  }
+
+  // 4️⃣ SAVE CHANGES
+  await vendor.save();
+
+  // 5️⃣ UPDATE CACHE
+  const vendorId = vendor._id.toString();
+  await this.cacheManager.set(
+    `vendor:${vendor.email}`,
+    { id: vendorId, email: vendor.email },
+    3600
+  );
+
+  this.logger.log(`Vendor profile updated: ${vendor.email}`);
+
+  return this.excludePassword(vendor);
+}
+
 
   // -----------------------
   // UPDATE LOCATION

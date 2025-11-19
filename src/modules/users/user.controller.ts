@@ -32,7 +32,7 @@ import { RolesGuard } from "src/common/guards/roles.guard";
 
 import {FileInterceptor} from "@nestjs/platform-express";
 import { UploadedFile,UseInterceptors } from "@nestjs/common";
-import { profile } from "console";
+
 
 @ApiTags("Users")
 @Controller("users")

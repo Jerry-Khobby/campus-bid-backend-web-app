@@ -9,6 +9,7 @@ import { RefreshTokenStrategy } from "src/common/guards/strategies/refresh-token
 import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.strategy"
 import { ConfigModule,ConfigService } from "@nestjs/config"
 import { JwtModule } from "@nestjs/jwt"
+import { CloudinaryModule } from "../uploads/cloudinary.module"
 
 
 
@@ -18,6 +19,7 @@ import { JwtModule } from "@nestjs/jwt"
         MongooseModule.forFeature([{ name: Vendor.name, schema: VendorSchema }]),
         ConfigModule,
         MailModule,
+        CloudinaryModule,
         JwtModule.registerAsync({
           imports: [ConfigModule],
           inject: [ConfigService],
