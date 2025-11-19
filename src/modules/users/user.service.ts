@@ -27,6 +27,7 @@ import { UpdatePaymentMethodDto } from "./dto/update-payment-method.dto";
 import { MailService } from "src/utils/mail.service";
 import { ConfigService } from "@nestjs/config";
 import * as argon2 from "argon2";
+import { CloudinaryService } from "../uploads/cloudinary.service";
 
 interface CacheUser {
   id: string;
@@ -64,11 +65,13 @@ export class UserService {
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   // ✅ CREATE USER (Signup)
   async createUser(
-    createUserDto: CreateUserDto
+    createUserDto: CreateUserDto,
+    uploadImage?: Express.Multer.File,
   ): Promise<{ user: SafeUser; accessToken: string; refreshToken: string }> {
     const email = createUserDto.email.trim().toLowerCase();
 
@@ -85,11 +88,22 @@ export class UserService {
       this.SALT_ROUNDS
     );
 
+  let profileImageUrl = null;
+
+  // 👇 Upload to Cloudinary if file was included
+  if (uploadImage) {
+    const uploaded = await this.cloudinaryService.uploadImage(uploadImage);
+    profileImageUrl = uploaded.secure_url;
+  }
     // Save user
     const newUser = new this.userModel({
       ...createUserDto,
       email,
       password: hashedPassword,
+      profile:{
+        ...createUserDto.profile,
+        profileImage: profileImageUrl||null,
+      }
     });
 
     let savedUser: UserDocument;
@@ -158,20 +172,44 @@ export class UserService {
   }
 
   // ✅ UPDATE PROFILE
-  async updateUser(userId: string, updateProfileDto: UpdateProfileDto): Promise<SafeUser> {
-    const user = await this.userModel.findById(userId);
-    if (!user) throw new NotFoundException("User not found");
+async updateUser(
+  userId: string,
+  updateProfileDto: UpdateProfileDto,
+  profileImage?: Express.Multer.File
+): Promise<SafeUser> {
+  const user = await this.userModel.findById(userId);
+  if (!user) throw new NotFoundException("User not found");
 
-    if (updateProfileDto.profile) {
-      user.profile = { ...user.profile, ...updateProfileDto.profile };
-    }
+  // 1️⃣ Upload image to Cloudinary if provided
+  let uploadedImageUrl = null;
 
-    await user.save();
-    const safeUser = this.excludePassword(user);
-
-    this.logger.log(`User ${user.email} updated profile successfully`);
-    return safeUser;
+  if (profileImage) {
+    const uploaded = await this.cloudinaryService.uploadImage(profileImage);
+    uploadedImageUrl = uploaded.secure_url;
   }
+
+  // 2️⃣ Merge profile fields
+  if (updateProfileDto.profile) {
+    user.profile = {
+      ...user.profile,
+      ...updateProfileDto.profile,
+    };
+  }
+
+  // 3️⃣ Only add/replace profileImage if a new one was uploaded
+  if (uploadedImageUrl) {
+    user.profile.profileImage = uploadedImageUrl;
+  }
+
+  // 4️⃣ Save changes
+  await user.save();
+
+  const safeUser = this.excludePassword(user);
+  this.logger.log(`User ${user.email} updated profile successfully`);
+
+  return safeUser;
+}
+
 
   // ✅ UPDATE ADDRESS
   async updateAddress(userId: string, addressDto: UpdateAddressDto) {

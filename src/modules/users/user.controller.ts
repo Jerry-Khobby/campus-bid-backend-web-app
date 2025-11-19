@@ -29,6 +29,11 @@ import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
 
+
+import {FileInterceptor} from "@nestjs/platform-express";
+import { UploadedFile,UseInterceptors } from "@nestjs/common";
+import { profile } from "console";
+
 @ApiTags("Users")
 @Controller("users")
 export class UserController {
@@ -36,11 +41,14 @@ export class UserController {
 
   // ✅ REGISTER
   @Post("register")
+  @UseInterceptors(FileInterceptor('profileImage'))
   @ApiOperation({ summary: "Register a new user account" })
   @ApiBody({ type: CreateUserDto })
   @ApiResponse({ status: 201, description: "User registered successfully" })
-  async register(@Body() createUserDto: CreateUserDto) {
-    const result = await this.userService.createUser(createUserDto);
+  async register(
+    @UploadedFile() profileImage: Express.Multer.File,
+    @Body() createUserDto: CreateUserDto) {
+    const result = await this.userService.createUser(createUserDto,profileImage);
     return {
       success: true,
       message: "User registered successfully",
@@ -112,24 +120,32 @@ export class UserController {
   }
 
   // ✅ UPDATE PROFILE
-  @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles("student")
-  @Post("update-profile")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Update user profile (student)" })
-  @ApiBody({ type: UpdateProfileDto })
-  @ApiResponse({ status: 200, description: "Profile updated successfully" })
-  async updateProfile(
-    @Request() req,
-    @Body() updateProfileDto: UpdateProfileDto
-  ) {
-    const user = await this.userService.updateUser(req.user.sub, updateProfileDto);
-    return {
-      success: true,
-      message: "Profile updated successfully",
-      user,
-    };
-  }
+@Post("update-profile")
+@UseGuards(AccessTokenGuard, RolesGuard)
+@Roles("student")
+@UseInterceptors(FileInterceptor("profileImage"))
+@ApiBearerAuth()
+@ApiOperation({ summary: "Update user profile (student)" })
+@ApiBody({ type: UpdateProfileDto })
+@ApiResponse({ status: 200, description: "Profile updated successfully" })
+async updateProfile(
+  @Request() req,
+  @UploadedFile() profileImage: Express.Multer.File,
+  @Body() updateProfileDto: UpdateProfileDto
+) {
+  const user = await this.userService.updateUser(
+    req.user.sub,
+    updateProfileDto,
+    profileImage
+  );
+
+  return {
+    success: true,
+    message: "Profile updated successfully",
+    user,
+  };
+}
+
 
   // ✅ UPDATE ADDRESS
   @UseGuards(AccessTokenGuard, RolesGuard)

@@ -8,11 +8,13 @@ import { ConfigModule,ConfigService } from "@nestjs/config";
 import { MailModule } from "src/utils/mail.module";
 import { RefreshTokenStrategy } from "src/common/guards/strategies/refresh-token.strategy";
 import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.strategy";
+import { CloudinaryModule } from "../uploads/cloudinary.module";
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     ConfigModule,
+    CloudinaryModule,
     MailModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
