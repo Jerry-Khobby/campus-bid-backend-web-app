@@ -150,7 +150,9 @@ export class UserService {
 
     // Validate
     if (!user) throw new NotFoundException("Invalid email or password");
-
+    if (!user.password) {
+  throw new UnauthorizedException("User does not have a password. Please login with Google.");
+    }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) throw new UnauthorizedException("Invalid email or password");
 
@@ -249,6 +251,12 @@ async updateUser(
   async changePassword(userId: string, dto: ChangePasswordDto) {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
+
+
+
+    if (!user.password) {
+  throw new UnauthorizedException("User does not have a password. Please login with Google.");
+}
 
     const match = await bcrypt.compare(dto.oldPassword, user.password);
     if (!match) throw new UnauthorizedException("Old password is incorrect");
@@ -395,12 +403,12 @@ async updateUser(
     lastName:string;
     profileImage?:string;
   }){
+    if(!googleUser.email){
+          throw new InternalServerErrorException('Google account does not provide email');}
       const email = googleUser.email.toLowerCase();
 
-  // 1️⃣ Find user by email (SAME as manual login)
   let user = await this.userModel.findOne({ email });
 
-  // 2️⃣ If user exists, link Google if not linked
   if (user) {
     if (!user.oauth?.googleId) {
       user.oauth = { googleId: googleUser.googleId };
@@ -409,7 +417,7 @@ async updateUser(
     }
   }
 
-  // 3️⃣ If user does NOT exist, create OAuth user
+  // If user does NOT exist, create OAuth user
   if (!user) {
     user = await this.userModel.create({
       email,

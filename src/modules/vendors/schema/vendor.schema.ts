@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
-import { Document,Types } from "mongoose";
+import { Document, Types } from "mongoose";
 
 /* --------------------------- Subschemas --------------------------- */
 
@@ -100,45 +100,73 @@ class BankDetails {
   isVerified?: boolean;
 }
 
+// ✅ OAuth Subschema
+@Schema({ _id: false })
+class OAuth {
+  @Prop()
+  googleId?: string;
+}
+
 /* ----------------------------- Vendor ----------------------------- */
 
 @Schema({ timestamps: true })
 export class Vendor extends Document {
+  // Email & password
   @Prop({ required: true, unique: true })
   email: string;
 
-  @Prop({ required: true })
-  password: string;
+  @Prop({
+    required: function (this: VendorDocument) {
+      return this.authProvider === "local";
+    },
+  })
+  password?: string;
 
+  // Auth provider
+  @Prop({ default: "local", enum: ["local", "google"] })
+  authProvider: "local" | "google";
+
+  @Prop({ type: OAuth, default: {} })
+  oauth?: OAuth;
+
+  // Role
   @Prop({ default: "vendor" })
   role: string;
 
+  // Profile info
   @Prop({ type: Profile, required: true })
   profile: Profile;
 
+  // Location
   @Prop({ type: Location, default: { type: "Point", coordinates: [0, 0] } })
   location: Location;
 
+  // Business hours
   @Prop({ type: [BusinessHour], default: [] })
   businessHours: BusinessHour[];
 
+  // Categories
   @Prop({ type: [String], default: [] })
   categories: string[];
 
+  // Rating & stats
   @Prop({ type: Rating, default: () => ({}) })
   rating: Rating;
 
   @Prop({ type: Stats, default: () => ({}) })
   stats: Stats;
 
+  // Bank details
   @Prop({ type: BankDetails, default: () => ({}) })
   bankDetails: BankDetails;
 
+  // Refresh token
+  @Prop({ default: null })
+  refreshToken?: string;
+
+  // Flags
   @Prop({ default: false })
   isVerified: boolean;
-
-  @Prop({default:null})
-  refreshToken?:string;
 
   @Prop({ default: true })
   isActive: boolean;
@@ -148,8 +176,8 @@ export class Vendor extends Document {
 
 export const VendorSchema = SchemaFactory.createForClass(Vendor);
 
-// ✅ Proper GeoJSON Index (important!)
+// ✅ Proper GeoJSON Index
 VendorSchema.index({ "location.coordinates": "2dsphere" });
 
 // Type alias
-export type VendorDocument = Vendor & Document & {_id:Types.ObjectId};
+export type VendorDocument = Vendor & Document & { _id: Types.ObjectId };

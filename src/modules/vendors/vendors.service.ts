@@ -132,6 +132,11 @@ export class VendorService {
     const vendor = await this.vendorModel.findOne({ email });
     if (!vendor) throw new NotFoundException("Invalid email or password");
 
+  if (!vendor.password) {
+    throw new UnauthorizedException(
+      `This account uses ${vendor.authProvider} OAuth. Please login via Google.`
+    );
+  }
     const valid = await bcrypt.compare(dto.password, vendor.password);
     if (!valid) throw new UnauthorizedException("Invalid email or password");
 
@@ -261,6 +266,9 @@ async updateProfile(
     const vendor = await this.vendorModel.findById(id);
     if (!vendor) throw new NotFoundException("Vendor not found");
 
+    if (!vendor.password) {
+  throw new UnauthorizedException("Cannot change password for OAuth user.");
+}
     const valid = await bcrypt.compare(dto.oldPassword, vendor.password);
     if (!valid) throw new UnauthorizedException("Old password is incorrect");
 
@@ -368,12 +376,55 @@ async updateProfile(
     return tokens;
   }
 
-  // -----------------------
-  // PRIVATE HELPER
-  // -----------------------
+  //private helper for password
   private excludePassword(vendor: VendorDocument): SafeVendor {
     const obj = vendor.toObject();
     const { password, refreshToken, ...rest } = obj;
     return { ...rest, _id: (vendor._id as Types.ObjectId).toString() } as SafeVendor;
   }
+
+async handleGoogleLogin(googleUser: {
+  googleId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  profileImage?: string;
+}) {
+  if (!googleUser.email) {
+    throw new InternalServerErrorException(
+      "Google account does not provide email"
+    );
+  }
+
+  const email = googleUser.email.toLowerCase();
+
+  //Check if vendor already exists
+  let vendor = await this.vendorModel.findOne({ email });
+
+  if (vendor) {
+    if (!vendor.oauth?.googleId) {
+      vendor.oauth = { googleId: googleUser.googleId };
+      vendor.authProvider = "google";
+      await vendor.save();
+    }
+  }
+
+  // If vendor does NOT exist, create a new OAuth vendor
+  if (!vendor) {
+    vendor = await this.vendorModel.create({
+      email,
+      password: null, // OAuth users don’t need a password
+      authProvider: "google",
+      isVerified: true,
+      oauth: { googleId: googleUser.googleId },
+      profile: {
+        businessName: googleUser.firstName + " " + googleUser.lastName,
+        logo: googleUser.profileImage || null,
+        phoneNumber: "",
+      },
+      role: "vendor",
+    });
+  }
+}
+
 }

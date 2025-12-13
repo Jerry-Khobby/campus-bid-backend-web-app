@@ -10,6 +10,7 @@ import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.s
 import { ConfigModule,ConfigService } from "@nestjs/config"
 import { JwtModule } from "@nestjs/jwt"
 import { CloudinaryModule } from "../uploads/cloudinary.module"
+import { GoogleStrategy } from "../users/oauth/google.strategy"
 
 
 
@@ -31,7 +32,7 @@ import { CloudinaryModule } from "../uploads/cloudinary.module"
         }),
   ],
   controllers:[VendorController],
-  providers:[VendorService,AccessTokenStrategy,RefreshTokenStrategy],
+  providers:[VendorService,AccessTokenStrategy,RefreshTokenStrategy,GoogleStrategy],
   exports:[VendorService]
 })
 

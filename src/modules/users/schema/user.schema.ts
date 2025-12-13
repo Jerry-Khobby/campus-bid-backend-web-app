@@ -22,8 +22,14 @@ export class User extends Document {
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
   email: string;
 
-  @Prop({ required: true })
-  password: string; // hashed
+  //I want to make the password optional for oauth users 
+  @Prop({
+      required: function(this: UserDocument) {
+    return this.authProvider === 'local';
+  },
+  })
+  password?: string;
+
 
   @Prop({ default: 'student', enum: ['student', 'admin', 'vendor'] })
   role: string;
