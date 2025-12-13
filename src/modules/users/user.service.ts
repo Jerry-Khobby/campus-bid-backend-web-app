@@ -385,4 +385,60 @@ async updateUser(
     const { password, ...rest } = userObj;
     return rest as SafeUser;
   }
+
+
+  //the service that handles the login with google 
+  async handleGoogleLogin(googleUser:{
+    googleId:string;
+    email:string;
+    firstName:string;
+    lastName:string;
+    profileImage?:string;
+  }){
+      const email = googleUser.email.toLowerCase();
+
+  // 1️⃣ Find user by email (SAME as manual login)
+  let user = await this.userModel.findOne({ email });
+
+  // 2️⃣ If user exists, link Google if not linked
+  if (user) {
+    if (!user.oauth?.googleId) {
+      user.oauth = { googleId: googleUser.googleId };
+      user.authProvider = 'google';
+      await user.save();
+    }
+  }
+
+  // 3️⃣ If user does NOT exist, create OAuth user
+  if (!user) {
+    user = await this.userModel.create({
+      email,
+      password: null,
+      authProvider: 'google',
+      isVerified: true,
+      oauth: { googleId: googleUser.googleId },
+      profile: {
+        firstName: googleUser.firstName,
+        lastName: googleUser.lastName,
+        profileImage: googleUser.profileImage,
+      },
+      role: 'student',
+    });
+  }
+
+  // 4️⃣ Issue JWTs (REUSE existing logic)
+  const tokens = await this.getTokens(
+    user._id.toString(),
+    user.email,
+    user.role,
+  );
+
+  await this.updateRefreshToken(user._id.toString(), tokens.refreshToken);
+
+  return {
+    success: true,
+    user: this.excludePassword(user),
+    ...tokens,
+  };
+  }
 }

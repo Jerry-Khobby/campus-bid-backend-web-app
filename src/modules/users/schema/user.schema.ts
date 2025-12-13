@@ -3,6 +3,21 @@ import { Document, Types } from 'mongoose';
 
 @Schema({ timestamps: true })
 export class User extends Document {
+
+  //I will have to update my schema to take into consideration the oauth that will be
+  //coming from the frontend 
+  @Prop({default:'local',enum:['local','google']})
+  authProvider:'local'|'google';
+
+  @Prop({
+    type:{
+      googleId:String,
+    },
+    default:{},
+  })
+  oauth?:{
+    googleId?:string;
+  }
   // Basic fields
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
   email: string;

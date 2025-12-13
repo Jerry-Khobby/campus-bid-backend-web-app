@@ -56,10 +56,6 @@ export class ProductsService {
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache
   ) {}
-
-  // -----------------------
-  // CREATE
-  // -----------------------
   async createProduct(dto: CreateProductDto,vendorId:string): Promise<{ product: SafeProduct }> {
     // Expect dto.vendorId provided by controller (from auth)
     if (!vendorId) throw new BadRequestException("vendorId is required");
@@ -99,10 +95,6 @@ export class ProductsService {
 
     return { product: this.toSafeProduct(saved) };
   }
-
-  // -----------------------
-  // UPDATE (owner-only)
-  // -----------------------
   async updateProduct(productId: string, actorId: string, dto: UpdateProductDto): Promise<SafeProduct> {
     if (!Types.ObjectId.isValid(productId)) throw new BadRequestException("Invalid productId");
 

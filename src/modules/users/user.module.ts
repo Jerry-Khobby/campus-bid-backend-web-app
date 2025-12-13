@@ -9,6 +9,7 @@ import { MailModule } from "src/utils/mail.module";
 import { RefreshTokenStrategy } from "src/common/guards/strategies/refresh-token.strategy";
 import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.strategy";
 import { CloudinaryModule } from "../uploads/cloudinary.module";
+import { GoogleStrategy } from "./oauth/google.strategy";
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { CloudinaryModule } from "../uploads/cloudinary.module";
     }),
   ],
   controllers: [UserController],
-  providers: [UserService,AccessTokenStrategy,RefreshTokenStrategy],
+  providers: [UserService,AccessTokenStrategy,RefreshTokenStrategy,GoogleStrategy],
   exports: [UserService],
 })
 export class UserModule {}

@@ -28,7 +28,7 @@ import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
-
+import { AuthGuard } from "@nestjs/passport";
 
 import {FileInterceptor} from "@nestjs/platform-express";
 import { UploadedFile,UseInterceptors } from "@nestjs/common";
@@ -215,4 +215,48 @@ async updateProfile(
       tokens,
     };
   }
+
+  // Redirects user to Google
+@ApiOperation({
+  summary: 'Login / Register with Google',
+  description: 'Redirects the user to Google OAuth consent screen',
+})
+@ApiResponse({
+  status: 302,
+  description: 'Redirects to Google OAuth',
+})
+@Get('google')
+@UseGuards(AuthGuard('google'))
+googleAuth() {
+  // Passport handles redirect automatically
+}
+
+
+  // Google redirects back here
+@ApiOperation({
+  summary: 'Google OAuth callback',
+  description: 'Handles Google response and returns JWT tokens',
+})
+@ApiResponse({
+  status: 200,
+  description: 'Google login successful',
+  schema: {
+    example: {
+      success: true,
+      user: {
+        email: 'user@gmail.com',
+        role: 'student',
+      },
+      accessToken: 'jwt-access-token',
+      refreshToken: 'jwt-refresh-token',
+    },
+  },
+})
+@Get('google/callback')
+@UseGuards(AuthGuard('google'))
+async googleCallback(@Req() req) {
+  // req.user comes from GoogleStrategy.validate()
+  return this.userService.handleGoogleLogin(req.user);
+}
+
 }
