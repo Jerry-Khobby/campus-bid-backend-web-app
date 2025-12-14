@@ -49,11 +49,6 @@ export interface SafeUser {
 
 
 
-//I will come and work on the user's profile image later 
-//where the user will be able to update their profile image 
-// I will first pass the image through cloudinary 
-// and store the url in the database 
-
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -68,7 +63,7 @@ export class UserService {
     private readonly cloudinaryService: CloudinaryService,
   ) {}
 
-  // ✅ CREATE USER (Signup)
+  //CREATE USER (Signup)
   async createUser(
     createUserDto: CreateUserDto,
     uploadImage?: Express.Multer.File,
@@ -90,7 +85,7 @@ export class UserService {
 
   let profileImageUrl = null;
 
-  // 👇 Upload to Cloudinary if file was included
+  // Upload to Cloudinary if file was included
   if (uploadImage) {
     const uploaded = await this.cloudinaryService.uploadImage(uploadImage);
     profileImageUrl = uploaded.secure_url;
@@ -173,7 +168,7 @@ export class UserService {
     return { user: safeUser, ...tokens };
   }
 
-  // ✅ UPDATE PROFILE
+  //UPDATE PROFILE
 async updateUser(
   userId: string,
   updateProfileDto: UpdateProfileDto,
@@ -182,7 +177,7 @@ async updateUser(
   const user = await this.userModel.findById(userId);
   if (!user) throw new NotFoundException("User not found");
 
-  // 1️⃣ Upload image to Cloudinary if provided
+  // Upload image to Cloudinary if provided
   let uploadedImageUrl = null;
 
   if (profileImage) {
@@ -190,7 +185,7 @@ async updateUser(
     uploadedImageUrl = uploaded.secure_url;
   }
 
-  // 2️⃣ Merge profile fields
+  // Merge profile fields
   if (updateProfileDto.profile) {
     user.profile = {
       ...user.profile,
@@ -198,12 +193,12 @@ async updateUser(
     };
   }
 
-  // 3️⃣ Only add/replace profileImage if a new one was uploaded
+  //  Only add/replace profileImage if a new one was uploaded
   if (uploadedImageUrl) {
     user.profile.profileImage = uploadedImageUrl;
   }
 
-  // 4️⃣ Save changes
+  //  Save changes
   await user.save();
 
   const safeUser = this.excludePassword(user);
@@ -213,7 +208,7 @@ async updateUser(
 }
 
 
-  // ✅ UPDATE ADDRESS
+  // UPDATE ADDRESS
   async updateAddress(userId: string, addressDto: UpdateAddressDto) {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
@@ -230,7 +225,7 @@ async updateUser(
     return user.addresses;
   }
 
-  // ✅ UPDATE PAYMENT METHOD
+  // UPDATE PAYMENT METHOD
   async updatePaymentMethod(userId: string, paymentDto: UpdatePaymentMethodDto) {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
@@ -247,7 +242,7 @@ async updateUser(
     return user.paymentMethods;
   }
 
-  // ✅ CHANGE PASSWORD
+  // CHANGE PASSWORD
   async changePassword(userId: string, dto: ChangePasswordDto) {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
@@ -269,7 +264,7 @@ async updateUser(
     return { success: true, message: "Password updated successfully" };
   }
 
-  // ✅ FORGOT PASSWORD
+  // FORGOT PASSWORD
   async forgotPassword(dto: ForgotPasswordDto) {
     const email = dto.email.toLowerCase();
     const user = await this.userModel.findOne({ email });
@@ -301,7 +296,7 @@ async updateUser(
     };
   }
 
-  // ✅ RESET PASSWORD
+  // RESET PASSWORD
   async resetPassword(dto: ResetPasswordDto) {
     const userId = await this.cacheManager.get<string>(`reset:${dto.token}`);
     if (!userId) throw new UnauthorizedException("Invalid or expired reset token");
@@ -319,27 +314,27 @@ async updateUser(
     return { success: true, message: "Password has been reset successfully" };
   }
 
-  // ✅ GET USER PROFILE
+  // GET USER PROFILE
   async getUserProfile(userId: string): Promise<SafeUser> {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
     return this.excludePassword(user);
   }
 
-  // ✅ VALIDATE USER (for auth guards)
+  //  VALIDATE USER (for auth guards)
   async validateUser(payload: any): Promise<SafeUser> {
     const user = await this.userModel.findById(payload.sub);
     if (!user) throw new UnauthorizedException("User not found");
     return this.excludePassword(user);
   }
 
-  // ✅ LOGOUT
+  // LOGOUT
   async logOut(userId: string) {
     await this.userModel.findByIdAndUpdate(userId, { refreshToken: null });
     return { success: true, message: "User logged out successfully" };
   }
 
-  // ✅ TOKEN HELPERS
+  //  TOKEN HELPERS
   hashData(data: string) {
     return argon2.hash(data);
   }
@@ -387,7 +382,7 @@ async updateUser(
     return tokens;
   }
 
-  // ✅ Helper: exclude password field
+  //  Helper: exclude password field
   private excludePassword(user: UserDocument): SafeUser {
     const userObj = user.toObject ? user.toObject() : user;
     const { password, ...rest } = userObj;
@@ -434,7 +429,7 @@ async updateUser(
     });
   }
 
-  // 4️⃣ Issue JWTs (REUSE existing logic)
+  // Issue JWTs (REUSE existing logic)
   const tokens = await this.getTokens(
     user._id.toString(),
     user.email,

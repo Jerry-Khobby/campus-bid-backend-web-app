@@ -170,7 +170,7 @@ async updateProfile(
   const vendor = await this.vendorModel.findById(id);
   if (!vendor) throw new NotFoundException("Vendor not found");
 
-  // 1️⃣ CLOUDINARY UPLOAD
+  //CLOUDINARY UPLOAD
   let uploadedLogoUrl = null;
 
   if (logo) {
@@ -178,7 +178,7 @@ async updateProfile(
     uploadedLogoUrl = uploaded.secure_url;
   }
 
-  // 2️⃣ MERGE OTHER PROFILE FIELDS
+  //  MERGE OTHER PROFILE FIELDS
   if (dto) {
     vendor.profile = {
       ...vendor.profile,
@@ -186,7 +186,7 @@ async updateProfile(
     };
   }
 
-  // 3️⃣ REPLACE LOGO ONLY IF NEW FILE WAS UPLOADED
+  // REPLACE LOGO ONLY IF NEW FILE WAS UPLOADED
   if (uploadedLogoUrl) {
     vendor.profile.logo = uploadedLogoUrl;
   }

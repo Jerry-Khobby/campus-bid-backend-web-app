@@ -4,7 +4,7 @@ import {
   UploadApiResponse,
   v2 as cloudinary,
 } from 'cloudinary';
-import * as toStream from 'buffer-to-stream';
+import toStream from 'buffer-to-stream';
 
 @Injectable()
 export class CloudinaryService {
@@ -13,6 +13,7 @@ export class CloudinaryService {
   ): Promise<UploadApiResponse | UploadApiErrorResponse> {
     return new Promise((resolve, reject) => {
       const upload = cloudinary.uploader.upload_stream(
+        {folder:'pictures'},
         (error, result) => {
           if (error) return reject(error);
           if (!result) return reject(new Error('Upload failed'));
