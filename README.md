@@ -1,98 +1,66 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# CampusBid Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A NestJS + MongoDB backend for CampusBid, a campus e-commerce marketplace: students browse and order from campus vendors, bid on time-boxed flash sales, chat with vendors, and pay through an escrow-style flow backed by Paystack.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Tech stack
 
-## Description
+NestJS 11 · MongoDB/Mongoose · Redis (`@nestjs/cache-manager`) · Socket.IO · JWT + Google OAuth · Cloudinary · Paystack · Jest
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Getting started
 
 ```bash
-$ npm install
+npm install
+cp .env.example .env   # fill in real values — see docs/environment-variables.md
+npm run start:dev      # http://localhost:3000/api, Swagger at /api-docs
 ```
 
-## Compile and run the project
+The app needs a reachable MongoDB and Redis instance to finish starting — see [docs/environment-variables.md](./docs/environment-variables.md) for every variable it reads and which ones are load-bearing.
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm test          # unit tests (167 tests / 14 suites at last count)
+npm run build     # production build (nest build)
+npm run test:e2e  # end-to-end tests
 ```
 
-## Run tests
+## Where to look
 
-```bash
-# unit tests
-$ npm run test
+This `README` is the front door. Everything else lives in [`docs/`](./docs), one file per concern, each verified directly against the current source rather than written from a plan or spec — a good habit for a codebase whose original planning document drifted far enough from reality that most of it had to be re-audited and rebuilt.
 
-# e2e tests
-$ npm run test:e2e
+### Cross-cutting
 
-# test coverage
-$ npm run test:cov
-```
+- [Architecture](./docs/architecture.md) — stack, module map, conventions (auth guards, response shapes, pagination, caching, error vocabulary), and known structural quirks
+- [Authentication & Authorization](./docs/authentication.md) — JWT access/refresh lifecycle, roles, Google OAuth
+- [Environment Variables](./docs/environment-variables.md) — every variable actually read by the code
+- [Testing](./docs/testing.md) — how to run tests, Jest config gotchas, conventions
 
-## Deployment
+### Modules
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+| Doc | Covers |
+| --- | --- |
+| [users.md](./docs/users.md) | Student accounts: registration/login, profile, addresses, payment methods |
+| [vendors.md](./docs/vendors.md) | Vendor accounts, public vendor discovery, vendor dashboard/analytics, payout routes |
+| [products.md](./docs/products.md) | Product catalog, stock/availability, nearby-products geosearch |
+| [categories.md](./docs/categories.md) | Product category taxonomy |
+| [flash-sales.md](./docs/flash-sales.md) | Bidding-style flash sales |
+| [orders.md](./docs/orders.md) | Order lifecycle: create → accept/reject → deliver → confirm/cancel |
+| [payments.md](./docs/payments.md) | Paystack integration, escrow hold/release/refund, vendor payout ledger |
+| [reviews.md](./docs/reviews.md) | Per-product/vendor reviews tied to completed orders |
+| [search.md](./docs/search.md) | Cross-collection text search |
+| [uploads.md](./docs/uploads.md) | Generic image upload (Cloudinary-backed) |
+| [chat.md](./docs/chat.md) | Buyer↔vendor messaging, REST + WebSocket |
+| [notifications.md](./docs/notifications.md) | Cross-cutting notification delivery, REST + WebSocket |
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### A note on API schemas
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+This documentation deliberately does not restate every request/response field for every endpoint — Swagger (`/api-docs`), generated straight from the DTOs, is the source of truth for exact shapes and literally cannot drift out of sync with the code the way a hand-written spec can. The `docs/` files focus on what Swagger can't show: request/response shape conventions per module, cross-module side effects, state machines, WebSocket events, and the "why" behind non-obvious decisions.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Known issues surfaced while writing this documentation
 
-## Resources
+Writing docs by reading the actual code (rather than trusting prior assumptions) turned up a few real bugs, listed here so they don't get lost:
 
-Check out a few resources that may come in handy when working with NestJS:
+- **Vendor Google OAuth is broken.** `VendorService.handleGoogleLogin` finds-or-creates the vendor but never returns a value, so `GET /vendors/google/callback` responds with an empty body instead of tokens. See [vendors.md](./docs/vendors.md).
+- **The chat WebSocket gateway has no authentication.** Unlike the notifications gateway (which verifies a JWT on connect), any socket can connect to the `/chat` namespace and join any conversation room just by supplying a `conversationId`. See [chat.md](./docs/chat.md).
+- **A refunded order can never be repaid.** `PaymentsService`'s "no active payment" guard only excludes `failed`-status payments, not `refunded` ones, so `POST /payments/initialize` will reject a second attempt on an order whose first payment was refunded. See [payments.md](./docs/payments.md).
+- Several other smaller gaps (unscheduled cron jobs, endpoints missing ownership checks, unused DTO fields, inconsistent response shapes) are called out inline in the relevant module doc rather than repeated here.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+None of these were fixed as part of this documentation pass — flagging them accurately was the goal; fixing them is separate work.
