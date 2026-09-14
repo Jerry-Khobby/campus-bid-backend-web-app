@@ -57,7 +57,12 @@ export class PaymentsService {
 
     const amountInSmallestUnit = this.toSmallestCurrencyUnit(order.pricing.total);
     const reference = this.generatePaymentReference(order._id as Types.ObjectId);
-    const callbackUrl = this.getPaystackCallbackUrl();
+
+    // Created before calling Paystack so its _id can be embedded in the
+    // callback URL below — the frontend needs paymentId to know which
+    // payment to poll once Paystack redirects the browser back.
+    const payment = await this.createPendingPayment(order, dto.paymentMethod, reference);
+    const callbackUrl = this.getPaystackCallbackUrl(payment._id as Types.ObjectId);
 
     const transaction = await this.paystackService.initializeTransaction(
       customerEmail,
@@ -65,8 +70,6 @@ export class PaymentsService {
       reference,
       callbackUrl,
     );
-
-    const payment = await this.createPendingPayment(order, dto.paymentMethod, reference);
 
     return {
       paymentId: payment._id as Types.ObjectId,
@@ -103,9 +106,10 @@ export class PaymentsService {
     return `ord_${orderId}_${Date.now()}`;
   }
 
-  private getPaystackCallbackUrl(): string {
+  private getPaystackCallbackUrl(paymentId: Types.ObjectId): string {
     const appUrl = this.configService.get<string>('APP_URL');
-    return appUrl ? `${appUrl}/payments/callback` : DEFAULT_PAYSTACK_CALLBACK_URL;
+    const base = appUrl ? `${appUrl}/payments/callback` : DEFAULT_PAYSTACK_CALLBACK_URL;
+    return `${base}?paymentId=${paymentId.toString()}`;
   }
 
   private async createPendingPayment(
