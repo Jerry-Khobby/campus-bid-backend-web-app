@@ -6,6 +6,7 @@ import {
   Logger,
   ForbiddenException,
   Inject,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -14,9 +15,11 @@ import type { Cache } from 'cache-manager';
 
 import { Conversation, ConversationDocument } from './schema/conversation.schema';
 import { Message, MessageDocument } from './schema/message.schema';
+import { PredefinedMessage, PredefinedMessageDocument } from './schema/predefined-message.schema';
+import { DEFAULT_PREDEFINED_MESSAGES } from './predefined-messages.seed';
 
 @Injectable()
-export class ChatService {
+export class ChatService implements OnModuleInit {
   private readonly logger = new Logger(ChatService.name);
 
   constructor(
@@ -26,9 +29,19 @@ export class ChatService {
     @InjectModel(Message.name)
     private readonly messageModel: Model<MessageDocument>,
 
+    @InjectModel(PredefinedMessage.name)
+    private readonly predefinedMessageModel: Model<PredefinedMessageDocument>,
+
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
   ) {}
+
+  async onModuleInit() {
+    const count = await this.predefinedMessageModel.countDocuments();
+    if (count === 0) {
+      await this.predefinedMessageModel.insertMany(DEFAULT_PREDEFINED_MESSAGES);
+    }
+  }
 
   // ----------------------------------------------------
   // GET OR CREATE CONVERSATION (with cache)
@@ -163,5 +176,46 @@ export class ChatService {
     );
 
     await this.cacheManager.del(`conversation:${conversationId}`);
+  }
+
+  // ----------------------------------------------------
+  // MARK ALL MESSAGES IN A CONVERSATION AS READ (gateway use)
+  // ----------------------------------------------------
+  async markConversationAsRead(conversationId: string) {
+    await this.messageModel.updateMany(
+      { conversationId, isRead: false },
+      { isRead: true, readAt: new Date() },
+    );
+
+    await this.conversationModel.updateOne(
+      { _id: conversationId },
+      { $set: { 'unreadCount.customer': 0, 'unreadCount.vendor': 0 } },
+    );
+
+    await this.cacheManager.del(`conversation:${conversationId}`);
+  }
+
+  // ----------------------------------------------------
+  // LIST CONVERSATIONS FOR THE AUTHENTICATED USER
+  // ----------------------------------------------------
+  async listConversations(userId: string, role: 'student' | 'vendor') {
+    const filter =
+      role === 'vendor'
+        ? { 'participants.vendorId': userId }
+        : { 'participants.customerId': userId };
+
+    return this.conversationModel.find(filter).sort({ updatedAt: -1 }).exec();
+  }
+
+  // ----------------------------------------------------
+  // GET PREDEFINED MESSAGES (optionally filtered)
+  // ----------------------------------------------------
+  async getPredefinedMessages(role?: string, category?: string) {
+    const filter: Record<string, any> = { isActive: true };
+
+    if (role) filter.$or = [{ role }, { role: 'both' }];
+    if (category) filter.category = category;
+
+    return this.predefinedMessageModel.find(filter).sort({ sortOrder: 1 }).exec();
   }
 }

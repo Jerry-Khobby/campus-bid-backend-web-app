@@ -13,9 +13,9 @@ import {
   ApiTags,
   ApiBearerAuth,
   ApiOperation,
-  ApiResponse,
 } from '@nestjs/swagger';
 import { ChatService } from './chat.service';
+import { PredefinedMessageQueryDto } from './dto/predefined-message-query.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 
 @ApiTags('Chat')
@@ -25,7 +25,7 @@ import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
-  @Post('conversation')
+  @Post('conversations')
   @ApiOperation({ summary: 'Get or create chat conversation between customer and vendor' })
   async getOrCreateConversation(
     @Request() req,
@@ -40,6 +40,21 @@ export class ChatController {
     return { success: true, message: 'Conversation ready', data: result };
   }
 
+  @Get('conversations')
+  @ApiOperation({ summary: 'List conversations for the authenticated user' })
+  async listConversations(@Request() req) {
+    const role = req.user.role === 'vendor' ? 'vendor' : 'student';
+    const data = await this.chatService.listConversations(req.user.sub, role);
+    return { success: true, message: 'Conversations retrieved', data };
+  }
+
+  @Get('predefined-messages')
+  @ApiOperation({ summary: 'Get predefined quick-reply messages' })
+  async getPredefinedMessages(@Query() query: PredefinedMessageQueryDto) {
+    const data = await this.chatService.getPredefinedMessages(query.role, query.category);
+    return { success: true, message: 'Predefined messages retrieved', data };
+  }
+
   @Get('conversation/:id')
   @ApiOperation({ summary: 'Fetch conversation by ID' })
   async getConversation(@Param('id') id: string) {
@@ -49,18 +64,14 @@ export class ChatController {
     };
   }
 
-  @Get('messages/:conversationId')
+  @Get('conversations/:id/messages')
   @ApiOperation({ summary: 'Get paginated messages' })
   async getMessages(
-    @Param('conversationId') conversationId: string,
+    @Param('id') id: string,
     @Query('skip') skip = 0,
     @Query('limit') limit = 30,
   ) {
-    const data = await this.chatService.getMessages(
-      conversationId,
-      Number(limit),
-      Number(skip),
-    );
+    const data = await this.chatService.getMessages(id, Number(limit), Number(skip));
     return { success: true, data };
   }
 

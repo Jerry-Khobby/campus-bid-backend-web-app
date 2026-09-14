@@ -1,6 +1,6 @@
-import { IsString, IsOptional, IsBoolean } from 'class-validator';
+import { IsBoolean, IsOptional, IsString } from "class-validator";
 
-export class UpdatePaymentMethodDto {
+export class CreatePaymentMethodDto {
   @IsString() type: string;
   @IsString() provider: string;
   @IsString() last4: string;

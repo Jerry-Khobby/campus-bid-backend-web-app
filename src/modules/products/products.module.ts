@@ -3,6 +3,9 @@ import { MongooseModule } from "@nestjs/mongoose";
 import { ProductsController } from "./products.controller";
 import { ProductsService } from "./products.service";
 import { Product, ProductSchema } from "./schema/product.schema";
+import { Vendor, VendorSchema } from "../vendors/schema/vendor.schema";
+import { CategoriesModule } from "../categories/categories.module";
+import { CloudinaryModule } from "../uploads/cloudinary.module";
 import { AccessTokenStrategy } from "src/common/guards/strategies/access-token.strategy";
 import { RefreshTokenStrategy } from "src/common/guards/strategies/refresh-token.strategy";
 import { ConfigModule,ConfigService } from "@nestjs/config";
@@ -11,7 +14,12 @@ import { JwtModule } from "@nestjs/jwt";
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Product.name, schema: ProductSchema }]),
+    MongooseModule.forFeature([
+      { name: Product.name, schema: ProductSchema },
+      { name: Vendor.name, schema: VendorSchema },
+    ]),
+    CategoriesModule,
+    CloudinaryModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

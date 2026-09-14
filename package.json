@@ -37,6 +37,7 @@
     "@nestjs/websockets": "^11.1.8",
     "@types/bcrypt": "^6.0.0",
     "argon2": "^0.44.0",
+    "axios": "^1.20.0",
     "bcrypt": "^6.0.0",
     "buffer-to-stream": "^1.0.0",
     "bull": "^4.16.5",
@@ -100,6 +101,12 @@
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "transformIgnorePatterns": [
+      "node_modules/(?!(uuid)/)"
+    ],
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1"
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"

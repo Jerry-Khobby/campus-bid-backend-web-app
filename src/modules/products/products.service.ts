@@ -1,9 +1,7 @@
 /* src/products/products.service.ts */
 import {
   Injectable,
-  ConflictException,
   NotFoundException,
-  UnauthorizedException,
   InternalServerErrorException,
   Logger,
   Inject,
@@ -17,13 +15,20 @@ import type { Cache } from "cache-manager";
 
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
-import { UpdateStockDto } from "./dto/update-stock.dto";
 import { UpdatePriceDto } from "./dto/update-price.dto";
 import { FilterProductDto } from "./dto/filter-product.dto";
-import { ProductRatingDto } from "./dto/product-rating.dto";
+import { NearbyQueryDto } from "./dto/nearby-query.dto";
+import { UpdateAvailabilityDto } from "./dto/update-availability.dto";
 
 /* Replace with your actual product schema import */
 import { Product, ProductDocument } from "./schema/product.schema";
+import { Vendor, VendorDocument } from "../vendors/schema/vendor.schema";
+import { CategoriesService } from "../categories/categories.service";
+
+const DEFAULT_RADIUS_KM = 5;
+const METERS_PER_KILOMETER = 1000;
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 10;
 
 export interface SafeProduct {
   _id: string;
@@ -48,19 +53,35 @@ export interface SafeProduct {
   updatedAt?: Date;
 }
 
+export interface NearbyProduct {
+  _id: string;
+  name: string;
+  price: number;
+  images: string[];
+  category: string;
+  rating?: { average: number; count: number };
+  vendorId: string;
+  vendorName: string;
+  distance: number;
+}
+
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
 
   constructor(
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache
+    @InjectModel(Vendor.name) private readonly vendorModel: Model<VendorDocument>,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly categoriesService: CategoriesService
   ) {}
   async createProduct(dto: CreateProductDto,vendorId:string): Promise<{ product: SafeProduct }> {
     // Expect dto.vendorId provided by controller (from auth)
     if (!vendorId) throw new BadRequestException("vendorId is required");
 
     if (!Types.ObjectId.isValid(vendorId)) throw new BadRequestException("Invalid vendorId");
+
+    await this.categoriesService.assertActiveCategory(dto.category);
 
     const product = new this.productModel({
       vendorId: new Types.ObjectId(vendorId),
@@ -104,6 +125,10 @@ export class ProductsService {
     // Ownership: only vendor who created product can update
     if (!product.vendorId || product.vendorId.toString() !== actorId) {
       throw new ForbiddenException("Not allowed to update this product");
+    }
+
+    if (dto.category) {
+      await this.categoriesService.assertActiveCategory(dto.category);
     }
 
     // Merge allowed fields from DTO
@@ -193,10 +218,67 @@ export class ProductsService {
   }
 
   // -----------------------
+  // NEARBY PRODUCTS (geospatial, via Vendor.location)
+  // -----------------------
+  async getNearbyProducts(dto: NearbyQueryDto): Promise<{ items: NearbyProduct[]; total: number; page: number; limit: number }> {
+    const page = Math.max(1, Number(dto.page) || DEFAULT_PAGE);
+    const limit = Math.max(1, Number(dto.limit) || DEFAULT_LIMIT);
+    const skip = (page - 1) * limit;
+
+    const pipeline = this.buildNearbyPipeline(dto);
+
+    const [items, countResult] = await Promise.all([
+      this.vendorModel.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]),
+      this.vendorModel.aggregate([...pipeline, { $count: "total" }]),
+    ]);
+
+    const total = countResult[0]?.total ?? 0;
+    return { items, total, page, limit };
+  }
+
+  private buildNearbyPipeline(dto: NearbyQueryDto): any[] {
+    const radiusMeters = (dto.radius ?? DEFAULT_RADIUS_KM) * METERS_PER_KILOMETER;
+
+    return [
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [dto.longitude, dto.latitude] },
+          distanceField: "distance",
+          maxDistance: radiusMeters,
+          spherical: true,
+          query: { isActive: true },
+          key: "location.coordinates",
+        },
+      },
+      { $lookup: { from: "products", localField: "_id", foreignField: "vendorId", as: "products" } },
+      { $unwind: "$products" },
+      {
+        $match: {
+          "products.isAvailable": true,
+          ...(dto.category && { "products.category": dto.category }),
+        },
+      },
+      {
+        $project: {
+          _id: "$products._id",
+          name: "$products.name",
+          price: "$products.price",
+          images: "$products.images",
+          category: "$products.category",
+          rating: "$products.rating",
+          vendorId: "$_id",
+          vendorName: "$profile.businessName",
+          distance: 1,
+        },
+      },
+      { $sort: { distance: 1 } },
+    ];
+  }
+
+  // -----------------------
   // UPDATE STOCK (owner-only)
   // -----------------------
-  async updateStock(dto: UpdateStockDto, actorId: string): Promise<{ productId: string; stock: number }> {
-    const { productId, stock } = dto;
+  async updateStock(productId: string, actorId: string, dto: { stock: number }): Promise<{ productId: string; stock: number }> {
     if (!Types.ObjectId.isValid(productId)) throw new BadRequestException("Invalid productId");
 
     const product = await this.productModel.findById(productId);
@@ -206,7 +288,7 @@ export class ProductsService {
       throw new ForbiddenException("Not allowed to update stock for this product");
     }
 
-    product.stock = stock;
+    product.stock = dto.stock;
     await product.save();
 
     await this.invalidateProductListCaches();
@@ -240,27 +322,47 @@ export class ProductsService {
   }
 
   // -----------------------
-  // RATE PRODUCT
+  // UPDATE AVAILABILITY (owner-only)
   // -----------------------
-  async rateProduct(dto: ProductRatingDto): Promise<{ productId: string; rating: { average: number; count: number } }> {
-    const { productId, rating } = dto;
+  async updateAvailability(productId: string, actorId: string, dto: UpdateAvailabilityDto): Promise<SafeProduct> {
     if (!Types.ObjectId.isValid(productId)) throw new BadRequestException("Invalid productId");
-    if (rating < 1 || rating > 5) throw new BadRequestException("Rating must be between 1 and 5");
 
     const product = await this.productModel.findById(productId);
     if (!product) throw new NotFoundException("Product not found");
 
-    const current = product.rating ?? { average: 0, count: 0 };
-    const newCount = (current.count || 0) + 1;
-    const newAvg = ((current.average || 0) * (current.count || 0) + rating) / newCount;
+    if (!product.vendorId || product.vendorId.toString() !== actorId) {
+      throw new ForbiddenException("Not allowed to update this product");
+    }
 
-    product.rating = { average: Number(newAvg.toFixed(2)), count: newCount };
+    product.isAvailable = dto.isAvailable;
     await product.save();
 
     await this.invalidateProductListCaches();
     await this.cacheManager.del(`product:${productId}`);
 
-    return { productId, rating: product.rating };
+    return this.toSafeProduct(product);
+  }
+
+  // -----------------------
+  // ADD PRODUCT IMAGES (owner-only)
+  // -----------------------
+  async addProductImages(productId: string, actorId: string, urls: string[]): Promise<string[]> {
+    if (!Types.ObjectId.isValid(productId)) throw new BadRequestException("Invalid productId");
+
+    const product = await this.productModel.findById(productId);
+    if (!product) throw new NotFoundException("Product not found");
+
+    if (!product.vendorId || product.vendorId.toString() !== actorId) {
+      throw new ForbiddenException("Not allowed to update this product");
+    }
+
+    product.images.push(...urls);
+    await product.save();
+
+    await this.invalidateProductListCaches();
+    await this.cacheManager.del(`product:${productId}`);
+
+    return product.images;
   }
 
   // -----------------------

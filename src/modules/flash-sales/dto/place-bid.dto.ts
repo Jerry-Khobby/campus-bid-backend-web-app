@@ -1,12 +1,6 @@
-import { IsMongoId, IsNotEmpty, IsNumber, Min } from 'class-validator';
-import { Types } from 'mongoose';
+import { IsNumber, Min } from 'class-validator';
 
 export class PlaceBidDto {
-  @IsMongoId()
-  @IsNotEmpty()
-  flashSaleId: Types.ObjectId;
-
-  
   @IsNumber()
   @Min(0)
   amount: number;

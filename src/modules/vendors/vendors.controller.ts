@@ -1,8 +1,11 @@
 import {
   Controller,
   Post,
+  Put,
   Body,
   Get,
+  Param,
+  Query,
   Request,
   UseGuards,
   Req,
@@ -20,6 +23,9 @@ import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { UpdateBankDetailsDto } from "./dto/update-bank-details.dto";
 import { UpdateBusinessHoursDto } from "./dto/update-business-hours.dto";
 import { UpdateLocationDto } from "./dto/update-location.dto";
+import { VendorQueryDto } from "./dto/vendor-query.dto";
+import { VendorSalesAnalyticsQueryDto } from "./dto/vendor-sales-analytics-query.dto";
+import { VendorProductAnalyticsQueryDto } from "./dto/vendor-product-analytics-query.dto";
 import { ChangePasswordDto } from "../users/dto/change-password.dto";
 import { ForgotPasswordDto } from "../users/dto/forgot-password.dto";
 import { ResetPasswordDto } from "../users/dto/reset-password.dto";
@@ -30,11 +36,26 @@ import { RolesGuard } from "src/common/guards/roles.guard";
 import {FileInterceptor} from "@nestjs/platform-express";
 import { UploadedFile,UseInterceptors } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
+import { CloudinaryService } from "../uploads/cloudinary.service";
+import { FilterProductDto } from "../products/dto/filter-product.dto";
+import { ProductsService } from "../products/products.service";
+import { FlashSaleService } from "../flash-sales/flash-sale.service";
+import { VendorFlashSaleQueryDto } from "../flash-sales/dto/vendor-flash-sale-query.dto";
+import { OrdersService } from "../orders/orders.service";
+import { OrderQueryDto } from "../orders/dto/order-query.dto";
+import { PayoutsService } from "../payments/payouts.service";
 
 @ApiTags("Vendors")
 @Controller("vendors")
 export class VendorController {
-  constructor(private readonly vendorService: VendorService) {}
+  constructor(
+    private readonly vendorService: VendorService,
+    private readonly cloudinaryService: CloudinaryService,
+    private readonly productsService: ProductsService,
+    private readonly flashSaleService: FlashSaleService,
+    private readonly ordersService: OrdersService,
+    private readonly payoutsService: PayoutsService,
+  ) {}
 
   // ✅ REGISTER (Public)
   @Post("register")
@@ -65,6 +86,14 @@ export class VendorController {
     };
   }
 
+  // ✅ LIST VENDORS (Public discovery)
+  @Get()
+  @ApiOperation({ summary: "Browse/search vendors (public)" })
+  async listVendors(@Query() query: VendorQueryDto) {
+    const data = await this.vendorService.listVendors(query);
+    return { success: true, message: "Vendors fetched successfully", data };
+  }
+
   // ✅ GET PROFILE (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
@@ -79,15 +108,38 @@ export class VendorController {
   // ✅ UPDATE PROFILE (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
-  @UseInterceptors(FileInterceptor("logo"))
-  @Post("update-profile")
+  @Put("profile")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update vendor profile details" })
-  async updateProfile(@Request() req,
-    @UploadedFile() logo: Express.Multer.File,
-  @Body() dto: UpdateProfileDto) {
-    const vendor = await this.vendorService.updateProfile(req.user.sub, dto,logo);
+  async updateProfile(@Request() req, @Body() dto: UpdateProfileDto) {
+    const vendor = await this.vendorService.updateProfile(req.user.sub, dto);
     return { success: true, message: "Profile updated successfully", vendor };
+  }
+
+  // ✅ UPDATE LOGO (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @UseInterceptors(FileInterceptor("logo"))
+  @Post("profile/logo")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Upload/replace vendor logo" })
+  async updateLogo(@Request() req, @UploadedFile() logo: Express.Multer.File) {
+    const uploaded = await this.cloudinaryService.uploadImage(logo);
+    const data = await this.vendorService.updateLogo(req.user.sub, uploaded.secure_url);
+    return { success: true, message: "Logo updated successfully", data };
+  }
+
+  // ✅ UPDATE BANNER (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @UseInterceptors(FileInterceptor("banner"))
+  @Post("profile/banner")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Upload/replace vendor banner" })
+  async updateBanner(@Request() req, @UploadedFile() banner: Express.Multer.File) {
+    const uploaded = await this.cloudinaryService.uploadImage(banner);
+    const data = await this.vendorService.updateBanner(req.user.sub, uploaded.secure_url);
+    return { success: true, message: "Banner updated successfully", data };
   }
 
   // ✅ UPDATE LOCATION (Vendor only)
@@ -115,7 +167,7 @@ export class VendorController {
   // ✅ UPDATE BANK DETAILS (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
-  @Post("update-bank-details")
+  @Put("bank-details")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update vendor bank account details" })
   async updateBankDetails(@Request() req, @Body() dto: UpdateBankDetailsDto) {
@@ -171,6 +223,123 @@ export class VendorController {
     return { success: true, message: "Tokens refreshed successfully", tokens };
   }
 
+  // ✅ MY PRODUCTS (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("products")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List the authenticated vendor's products" })
+  async getMyProducts(@Request() req, @Query() query: FilterProductDto) {
+    const data = await this.productsService.listProducts({ ...query, vendorId: req.user.sub });
+    return { success: true, message: "Products fetched successfully", data };
+  }
+
+  // ✅ MY FLASH SALES (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("flash-sales")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List the authenticated vendor's flash sales" })
+  async getMyFlashSales(@Request() req, @Query() query: VendorFlashSaleQueryDto) {
+    const data = await this.flashSaleService.getVendorFlashSales(req.user.sub, query);
+    return { success: true, message: "Flash sales fetched successfully", data };
+  }
+
+  // ✅ MY ORDERS (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("orders")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List the authenticated vendor's orders" })
+  async getMyOrders(@Request() req, @Query() query: OrderQueryDto) {
+    const data = await this.ordersService.getOrders(req.user.sub, "vendor", query);
+    return { success: true, message: "Orders fetched successfully", data };
+  }
+
+  // ✅ MY ORDER BY ID (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("orders/:id")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Fetch one of the authenticated vendor's orders" })
+  async getMyOrderById(@Request() req, @Param("id") id: string) {
+    const data = await this.ordersService.getOrderById(id, req.user.sub, "vendor");
+    return { success: true, message: "Order fetched successfully", data };
+  }
+
+  // ✅ LIST PAYOUTS (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("payouts")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List payout requests for the authenticated vendor" })
+  async getPayouts(@Request() req) {
+    const data = await this.payoutsService.listPayouts(req.user.sub);
+    return { success: true, message: "Payouts fetched successfully", data };
+  }
+
+  // ✅ REQUEST PAYOUT (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Post("payouts/request")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Request a payout of the available balance" })
+  async requestPayout(@Request() req) {
+    const data = await this.payoutsService.requestPayout(req.user.sub);
+    return { success: true, message: "Payout requested successfully", data };
+  }
+
+  // ✅ HELD PAYMENTS (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("payouts/held-payments")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List held payments contributing to the pending balance" })
+  async getHeldPayments(@Request() req) {
+    const data = await this.payoutsService.getHeldPayments(req.user.sub);
+    return { success: true, message: "Held payments fetched successfully", data };
+  }
+
+  // ✅ DASHBOARD (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("dashboard")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Fetch the authenticated vendor's dashboard summary" })
+  async getDashboard(@Request() req) {
+    const data = await this.vendorService.getDashboard(req.user.sub);
+    return { success: true, message: "Dashboard fetched successfully", data };
+  }
+
+  // ✅ SALES ANALYTICS (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("analytics/sales")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Fetch the authenticated vendor's sales analytics" })
+  async getSalesAnalytics(@Request() req, @Query() query: VendorSalesAnalyticsQueryDto) {
+    const data = await this.vendorService.getSalesAnalytics(req.user.sub, query);
+    return { success: true, message: "Sales analytics fetched successfully", data };
+  }
+
+  // ✅ PRODUCT ANALYTICS (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Get("analytics/products")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Fetch the authenticated vendor's product analytics" })
+  async getProductAnalytics(@Request() req, @Query() query: VendorProductAnalyticsQueryDto) {
+    const data = await this.vendorService.getProductAnalytics(req.user.sub, query);
+    return { success: true, message: "Product analytics fetched successfully", data };
+  }
+
+  // ✅ VENDOR PRODUCTS (Public)
+  @Get(":id/products")
+  @ApiOperation({ summary: "List a vendor's products (public)" })
+  async getVendorProducts(@Param("id") id: string, @Query() query: FilterProductDto) {
+    const data = await this.productsService.listProducts({ ...query, vendorId: id });
+    return { success: true, message: "Products fetched successfully", data };
+  }
 
   // Redirects user to Google
   @ApiOperation({
@@ -186,8 +355,8 @@ export class VendorController {
   googleAuth() {
     // Passport handles redirect automatically
   }
-  
-  
+
+
     // Google redirects back here
   @ApiOperation({
     summary: 'Google OAuth callback',
@@ -213,5 +382,13 @@ export class VendorController {
   async googleCallback(@Req() req) {
     // req.user comes from GoogleStrategy.validate()
     return this.vendorService.handleGoogleLogin(req.user);
+  }
+
+  // ✅ VENDOR PUBLIC PROFILE (Public) — must stay last: catches any single-segment /vendors/:id path
+  @Get(":id")
+  @ApiOperation({ summary: "Fetch a vendor's public profile" })
+  async getVendorById(@Param("id") id: string) {
+    const vendor = await this.vendorService.getPublicVendorById(id);
+    return { success: true, message: "Vendor fetched successfully", vendor };
   }
 }

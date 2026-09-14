@@ -1,0 +1,406 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { getModelToken } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { PaymentsService } from './payment.service';
+import { PaystackService } from './paystack.service';
+import { Payment } from './schema/payment.schema';
+import { Order } from '../orders/schema/order.schema';
+
+// The real order.schema.ts pulls in the `uuid` package (ESM-only), which the
+// project's CommonJS Jest transform cannot parse. Stub it so this unit test
+// stays isolated from that unrelated, pre-existing toolchain incompatibility.
+jest.mock('../orders/schema/order.schema', () => ({
+  Order: class Order {},
+}));
+
+const CUSTOMER_ID = '507f1f77bcf86cd799439011';
+const VENDOR_ID = '507f1f77bcf86cd799439012';
+const ORDER_ID = '507f1f77bcf86cd799439013';
+const PAYMENT_ID = '507f1f77bcf86cd799439014';
+
+function createPaymentDoc(overrides: Record<string, any> = {}) {
+  const doc: any = {
+    _id: PAYMENT_ID,
+    customerId: { toString: () => CUSTOMER_ID },
+    vendorId: { toString: () => VENDOR_ID },
+    orderId: ORDER_ID,
+    amount: 100,
+    status: 'held',
+    metadata: {},
+    ...overrides,
+  };
+  doc.save = jest.fn().mockResolvedValue(doc);
+  return doc;
+}
+
+describe('PaymentsService', () => {
+  let service: PaymentsService;
+  let paymentModel: any;
+  let orderModel: any;
+  let paystackService: jest.Mocked<PaystackService>;
+
+  beforeEach(async () => {
+    paymentModel = jest.fn().mockImplementation((data: any) => ({
+      ...data,
+      _id: PAYMENT_ID,
+      save: jest.fn().mockResolvedValue({ ...data, _id: PAYMENT_ID }),
+    }));
+    paymentModel.findOne = jest.fn();
+    paymentModel.findById = jest.fn();
+    paymentModel.find = jest.fn().mockReturnValue({ sort: jest.fn().mockResolvedValue([]) });
+
+    orderModel = { findById: jest.fn() };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        PaymentsService,
+        { provide: getModelToken(Payment.name), useValue: paymentModel },
+        { provide: getModelToken(Order.name), useValue: orderModel },
+        {
+          provide: PaystackService,
+          useValue: {
+            initializeTransaction: jest.fn(),
+            verifyTransaction: jest.fn(),
+            verifyWebhookSignature: jest.fn(),
+          },
+        },
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
+      ],
+    }).compile();
+
+    service = module.get<PaymentsService>(PaymentsService);
+    paystackService = module.get(PaystackService);
+  });
+
+  describe('initializePayment', () => {
+    const dto = { orderId: ORDER_ID, paymentMethod: 'card' } as any;
+
+    it('creates a pending payment and returns the Paystack authorization data', async () => {
+      orderModel.findById.mockResolvedValue({
+        _id: ORDER_ID,
+        customerId: { toString: () => CUSTOMER_ID },
+        vendorId: VENDOR_ID,
+        pricing: { total: 150 },
+      });
+      paymentModel.findOne.mockResolvedValue(null);
+      paystackService.initializeTransaction.mockResolvedValue({
+        authorization_url: 'https://paystack.com/pay/xyz',
+        access_code: 'access123',
+        reference: 'ref123',
+      } as any);
+
+      const result = await service.initializePayment(CUSTOMER_ID, dto, 'buyer@campus.edu');
+
+      expect(result.authorizationUrl).toBe('https://paystack.com/pay/xyz');
+      expect(paystackService.initializeTransaction).toHaveBeenCalledWith(
+        'buyer@campus.edu',
+        15000,
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      orderModel.findById.mockResolvedValue(null);
+
+      await expect(service.initializePayment(CUSTOMER_ID, dto, 'buyer@campus.edu')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws ForbiddenException when the order belongs to another customer', async () => {
+      orderModel.findById.mockResolvedValue({
+        _id: ORDER_ID,
+        customerId: { toString: () => 'someone-else' },
+        pricing: { total: 150 },
+      });
+
+      await expect(service.initializePayment(CUSTOMER_ID, dto, 'buyer@campus.edu')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ConflictException when the order already has an active payment', async () => {
+      orderModel.findById.mockResolvedValue({
+        _id: ORDER_ID,
+        customerId: { toString: () => CUSTOMER_ID },
+        pricing: { total: 150 },
+      });
+      paymentModel.findOne.mockResolvedValue(createPaymentDoc());
+
+      await expect(service.initializePayment(CUSTOMER_ID, dto, 'buyer@campus.edu')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  describe('handleWebhook', () => {
+    it('throws UnauthorizedException when the signature is invalid', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(false);
+
+      await expect(
+        service.handleWebhook(Buffer.from('{}'), 'bad-sig', { event: 'charge.success' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('ignores events it does not handle', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+
+      const result = await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'subscription.create',
+      });
+
+      expect(result).toEqual({ received: true });
+      expect(paymentModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('returns received without throwing when the payment is not found', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      paymentModel.findOne.mockResolvedValue(null);
+
+      const result = await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.success',
+        data: { reference: 'unknown-ref' },
+      });
+
+      expect(result).toEqual({ received: true });
+    });
+
+    it('is idempotent for payments that are no longer pending', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findOne.mockResolvedValue(payment);
+
+      await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.success',
+        data: { reference: 'ref123' },
+      });
+
+      expect(paystackService.verifyTransaction).not.toHaveBeenCalled();
+      expect(payment.save).not.toHaveBeenCalled();
+    });
+
+    it('moves a pending payment to held on a verified charge.success', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      const payment = createPaymentDoc({ status: 'pending', amount: 150 });
+      paymentModel.findOne.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'success', amount: 15000 } as any);
+
+      await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.success',
+        data: { reference: 'ref123' },
+      });
+
+      expect(payment.status).toBe('held');
+      expect(payment.save).toHaveBeenCalled();
+    });
+
+    it('does not release funds when the verified amount does not match', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      const payment = createPaymentDoc({ status: 'pending', amount: 150 });
+      paymentModel.findOne.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'success', amount: 5000 } as any);
+
+      await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.success',
+        data: { reference: 'ref123' },
+      });
+
+      expect(payment.status).toBe('pending');
+      expect(payment.save).not.toHaveBeenCalled();
+    });
+
+    it('marks a pending payment as failed on charge.failed', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      const payment = createPaymentDoc({ status: 'pending' });
+      paymentModel.findOne.mockResolvedValue(payment);
+
+      await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.failed',
+        data: { reference: 'ref123' },
+      });
+
+      expect(payment.status).toBe('failed');
+      expect(payment.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('listPayments', () => {
+    it('builds a filter from the provided query fields', async () => {
+      const sort = jest.fn().mockResolvedValue([]);
+      paymentModel.find.mockReturnValue({ sort });
+
+      await service.listPayments({
+        status: 'held',
+        paymentMethod: 'card',
+        customerId: CUSTOMER_ID,
+        vendorId: VENDOR_ID,
+        transactionId: 'ref123',
+      } as any);
+
+      expect(paymentModel.find).toHaveBeenCalledWith({
+        status: 'held',
+        paymentMethod: 'card',
+        customerId: expect.any(Object),
+        vendorId: expect.any(Object),
+        transactionId: 'ref123',
+      });
+    });
+
+    it('applies no filter when the query is empty', async () => {
+      const sort = jest.fn().mockResolvedValue([]);
+      paymentModel.find.mockReturnValue({ sort });
+
+      await service.listPayments({} as any);
+
+      expect(paymentModel.find).toHaveBeenCalledWith({});
+    });
+  });
+
+  describe('updatePayment', () => {
+    it('merges the dto fields into the payment and saves it', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      const result = await service.updatePayment(PAYMENT_ID, { currency: 'USD' } as any);
+
+      expect(result.currency).toBe('USD');
+      expect(payment.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('findById', () => {
+    it('throws BadRequestException for a malformed id', async () => {
+      await expect(service.findById('not-an-id')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException when no payment exists', async () => {
+      paymentModel.findById.mockResolvedValue(null);
+      await expect(service.findById(PAYMENT_ID)).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the payment when found', async () => {
+      const payment = createPaymentDoc();
+      paymentModel.findById.mockResolvedValue(payment);
+      await expect(service.findById(PAYMENT_ID)).resolves.toBe(payment);
+    });
+  });
+
+  describe('getPaymentHistory', () => {
+    it('filters by customerId for a student', async () => {
+      const sort = jest.fn().mockResolvedValue([]);
+      paymentModel.find.mockReturnValue({ sort });
+
+      await service.getPaymentHistory(CUSTOMER_ID, 'student');
+
+      expect(paymentModel.find).toHaveBeenCalledWith({ customerId: CUSTOMER_ID });
+    });
+
+    it('filters by vendorId for a vendor', async () => {
+      const sort = jest.fn().mockResolvedValue([]);
+      paymentModel.find.mockReturnValue({ sort });
+
+      await service.getPaymentHistory(VENDOR_ID, 'vendor');
+
+      expect(paymentModel.find).toHaveBeenCalledWith({ vendorId: VENDOR_ID });
+    });
+
+    it('applies no filter for an admin', async () => {
+      const sort = jest.fn().mockResolvedValue([]);
+      paymentModel.find.mockReturnValue({ sort });
+
+      await service.getPaymentHistory('admin-id', 'admin');
+
+      expect(paymentModel.find).toHaveBeenCalledWith({});
+    });
+  });
+
+  describe('releasePayment', () => {
+    it('splits the amount between vendor and admin commission', async () => {
+      const payment = createPaymentDoc({ status: 'held', amount: 100 });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      const result = await service.releasePayment(PAYMENT_ID, CUSTOMER_ID);
+
+      expect(result.status).toBe('released');
+      expect(result.adminCommission).toBeCloseTo(10);
+      expect(result.vendorPayout).toBeCloseTo(90);
+    });
+
+    it('throws ForbiddenException when the actor is not the customer', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      await expect(service.releasePayment(PAYMENT_ID, 'someone-else')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ConflictException when the payment is not held', async () => {
+      const payment = createPaymentDoc({ status: 'refunded' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      await expect(service.releasePayment(PAYMENT_ID, CUSTOMER_ID)).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('refundPayment', () => {
+    const dto = { reason: 'item never arrived' } as any;
+
+    it('refunds a held payment for its owning customer', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      const result = await service.refundPayment(PAYMENT_ID, dto, CUSTOMER_ID);
+
+      expect(result.status).toBe('refunded');
+      expect(result.metadata?.refundReason).toBe('item never arrived');
+    });
+
+    it('refunds a held payment when the actor is the order vendor', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      const result = await service.refundPayment(PAYMENT_ID, dto, VENDOR_ID);
+
+      expect(result.status).toBe('refunded');
+    });
+
+    it('throws ForbiddenException when the actor is neither the customer nor the vendor', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      await expect(service.refundPayment(PAYMENT_ID, dto, 'someone-else')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ConflictException when the payment is not held', async () => {
+      const payment = createPaymentDoc({ status: 'released' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      await expect(service.refundPayment(PAYMENT_ID, dto, CUSTOMER_ID)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  describe('updatePaymentStatus', () => {
+    it('updates the status and persists it', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      const result = await service.updatePaymentStatus(PAYMENT_ID, { status: 'failed' } as any);
+
+      expect(result.status).toBe('failed');
+      expect(payment.save).toHaveBeenCalled();
+    });
+  });
+});

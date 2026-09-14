@@ -25,7 +25,7 @@ export class Payment {
 
   @Prop({
     type: String,
-    enum: ['held', 'released', 'refunded', 'failed'],
+    enum: ['pending', 'held', 'released', 'refunded', 'failed'],
     default: 'held',
     index: true,
   })
@@ -34,12 +34,14 @@ export class Payment {
   @Prop({ type: String, unique: true })
   transactionId: string;
 
+  @Prop({ type: Types.ObjectId, ref: 'Payout', index: true })
+  payoutId?: Types.ObjectId;
+
   @Prop({ type: Number, default: 0 })
-adminCommission: number;
+  adminCommission: number;
 
-@Prop({ type: Number, default: 0 })
-vendorPayout: number;
-
+  @Prop({ type: Number, default: 0 })
+  vendorPayout: number;
 
   @Prop() gatewayReference?: string;
 
@@ -57,4 +59,3 @@ export const PaymentSchema = SchemaFactory.createForClass(Payment);
 // Indexes
 PaymentSchema.index({ customerId: 1, createdAt: -1 });
 PaymentSchema.index({ vendorId: 1, createdAt: -1 });
-PaymentSchema.index({ status: 1 });

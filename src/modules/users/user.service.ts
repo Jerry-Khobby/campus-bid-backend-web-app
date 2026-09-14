@@ -7,9 +7,10 @@ import {
   NotFoundException,
   UnauthorizedException,
   ForbiddenException,
+  BadRequestException,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
-import { Model } from "mongoose";
+import { Model, Types } from "mongoose";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
 import type { Cache } from "cache-manager";
 import * as bcrypt from "bcrypt";
@@ -22,9 +23,10 @@ import { ChangePasswordDto } from "./dto/change-password.dto";
 import { ForgotPasswordDto } from "./dto/forgot-password.dto";
 import { ResetPasswordDto } from "./dto/reset-password.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
+import { CreateAddressDto } from "./dto/create-address.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
-import { UpdatePaymentMethodDto } from "./dto/update-payment-method.dto";
-import { MailService } from "src/utils/mail.service";
+import { CreatePaymentMethodDto } from "./dto/create-payment-method.dto";
+import { MailService } from "../../utils/mail.service";
 import { ConfigService } from "@nestjs/config";
 import * as argon2 from "argon2";
 import { CloudinaryService } from "../uploads/cloudinary.service";
@@ -169,77 +171,205 @@ export class UserService {
   }
 
   //UPDATE PROFILE
-async updateUser(
-  userId: string,
-  updateProfileDto: UpdateProfileDto,
-  profileImage?: Express.Multer.File
-): Promise<SafeUser> {
-  const user = await this.userModel.findById(userId);
-  if (!user) throw new NotFoundException("User not found");
-
-  // Upload image to Cloudinary if provided
-  let uploadedImageUrl = null;
-
-  if (profileImage) {
-    const uploaded = await this.cloudinaryService.uploadImage(profileImage);
-    uploadedImageUrl = uploaded.secure_url;
-  }
-
-  // Merge profile fields
-  if (updateProfileDto.profile) {
-    user.profile = {
-      ...user.profile,
-      ...updateProfileDto.profile,
-    };
-  }
-
-  //  Only add/replace profileImage if a new one was uploaded
-  if (uploadedImageUrl) {
-    user.profile.profileImage = uploadedImageUrl;
-  }
-
-  //  Save changes
-  await user.save();
-
-  const safeUser = this.excludePassword(user);
-  this.logger.log(`User ${user.email} updated profile successfully`);
-
-  return safeUser;
-}
-
-
-  // UPDATE ADDRESS
-  async updateAddress(userId: string, addressDto: UpdateAddressDto) {
+  async updateUser(
+    userId: string,
+    updateProfileDto: UpdateProfileDto
+  ): Promise<SafeUser> {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
 
-    const existing = user.addresses.find(
-      (a) => a.label === addressDto.label
-    );
-
-    if (existing) Object.assign(existing, addressDto);
-    else user.addresses.push(addressDto as any);
+    if (updateProfileDto.profile) {
+      user.profile = {
+        ...user.profile,
+        ...updateProfileDto.profile,
+      };
+    }
 
     await user.save();
-    this.logger.log(`Address updated for ${user.email}`);
+    this.logger.log(`User ${user.email} updated profile successfully`);
+
+    return this.excludePassword(user);
+  }
+
+  // UPDATE PROFILE IMAGE
+  async updateProfileImage(userId: string, imageUrl: string): Promise<SafeUser> {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException("User not found");
+
+    user.profile.profileImage = imageUrl;
+    await user.save();
+
+    this.logger.log(`Profile image updated for ${user.email}`);
+    return this.excludePassword(user);
+  }
+
+  // GET ADDRESSES
+  async getAddresses(userId: string) {
+    const user = await this.userModel.findById(userId).select("addresses");
+    if (!user) throw new NotFoundException("User not found");
     return user.addresses;
   }
 
-  // UPDATE PAYMENT METHOD
-  async updatePaymentMethod(userId: string, paymentDto: UpdatePaymentMethodDto) {
+  // ADD ADDRESS
+  async addAddress(userId: string, dto: CreateAddressDto) {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
 
-    const existing = user.paymentMethods.find(
-      (p) => p.last4 === paymentDto.last4
-    );
+    if (dto.isDefault) await this.clearDefaultAddresses(userId);
 
-    if (existing) Object.assign(existing, paymentDto);
-    else user.paymentMethods.push(paymentDto as any);
+    const updated = await this.userModel.findByIdAndUpdate(
+      userId,
+      { $push: { addresses: this.buildAddress(dto) } },
+      { new: true }
+    );
+    if (!updated) throw new NotFoundException("User not found");
+
+    this.logger.log(`Address added for ${user.email}`);
+    return updated.addresses;
+  }
+
+  // UPDATE ADDRESS
+  async updateAddress(userId: string, addressId: string, dto: UpdateAddressDto) {
+    this.assertValidId(addressId, "address");
+
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException("User not found");
+
+    const address = this.addressArray(user).id(addressId);
+    if (!address) throw new NotFoundException("Address not found");
+
+    if (dto.isDefault) this.unsetOtherDefaultAddresses(user, addressId);
+    this.mergeAddressFields(address, dto);
 
     await user.save();
-    this.logger.log(`Payment method updated for ${user.email}`);
+    this.logger.log(`Address ${addressId} updated for ${user.email}`);
+    return user.addresses;
+  }
+
+  // DELETE ADDRESS
+  async deleteAddress(userId: string, addressId: string) {
+    this.assertValidId(addressId, "address");
+
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException("User not found");
+
+    if (!this.addressArray(user).id(addressId))
+      throw new NotFoundException("Address not found");
+
+    this.addressArray(user).pull(addressId);
+    await user.save();
+
+    this.logger.log(`Address ${addressId} deleted for ${user.email}`);
+    return user.addresses;
+  }
+
+  // GET PAYMENT METHODS
+  async getPaymentMethods(userId: string) {
+    const user = await this.userModel.findById(userId).select("paymentMethods");
+    if (!user) throw new NotFoundException("User not found");
     return user.paymentMethods;
+  }
+
+  // ADD PAYMENT METHOD
+  async addPaymentMethod(userId: string, dto: CreatePaymentMethodDto) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException("User not found");
+
+    if (dto.isDefault) await this.clearDefaultPaymentMethods(userId);
+
+    const updated = await this.userModel.findByIdAndUpdate(
+      userId,
+      { $push: { paymentMethods: dto } },
+      { new: true }
+    );
+    if (!updated) throw new NotFoundException("User not found");
+
+    this.logger.log(`Payment method added for ${user.email}`);
+    return updated.paymentMethods;
+  }
+
+  // DELETE PAYMENT METHOD
+  async deletePaymentMethod(userId: string, paymentMethodId: string) {
+    this.assertValidId(paymentMethodId, "payment method");
+
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException("User not found");
+
+    if (!this.paymentMethodArray(user).id(paymentMethodId))
+      throw new NotFoundException("Payment method not found");
+
+    this.paymentMethodArray(user).pull(paymentMethodId);
+    await user.save();
+
+    this.logger.log(`Payment method ${paymentMethodId} deleted for ${user.email}`);
+    return user.paymentMethods;
+  }
+
+  //  Helper: validate a Mongo ObjectId path parameter
+  private assertValidId(id: string, label: string) {
+    if (!Types.ObjectId.isValid(id))
+      throw new BadRequestException(`Invalid ${label} id`);
+  }
+
+  //  Helper: expose addresses as a Mongoose subdocument array (adds .id()/.pull())
+  private addressArray(user: UserDocument): Types.DocumentArray<any> {
+    return user.addresses as unknown as Types.DocumentArray<any>;
+  }
+
+  //  Helper: expose paymentMethods as a Mongoose subdocument array
+  private paymentMethodArray(user: UserDocument): Types.DocumentArray<any> {
+    return user.paymentMethods as unknown as Types.DocumentArray<any>;
+  }
+
+  //  Helper: build an address subdocument from a CreateAddressDto
+  private buildAddress(dto: CreateAddressDto) {
+    return {
+      label: dto.label,
+      building: dto.building,
+      room: dto.room,
+      location: { type: "Point", coordinates: [dto.longitude, dto.latitude] },
+      instructions: dto.instructions,
+      isDefault: dto.isDefault,
+    };
+  }
+
+  //  Helper: merge partial fields into an existing address subdocument
+  private mergeAddressFields(address: any, dto: UpdateAddressDto) {
+    const { latitude, longitude, ...fields } = dto;
+    Object.assign(address, fields);
+
+    if (latitude !== undefined || longitude !== undefined) {
+      address.location = {
+        type: "Point",
+        coordinates: [
+          longitude ?? address.location.coordinates[0],
+          latitude ?? address.location.coordinates[1],
+        ],
+      };
+    }
+  }
+
+  //  Helper: unset isDefault on every address except the one being updated
+  private unsetOtherDefaultAddresses(user: UserDocument, exceptId: string) {
+    for (const address of user.addresses as any[]) {
+      if (address._id.toString() !== exceptId) address.isDefault = false;
+    }
+  }
+
+  //  Helper: unset isDefault on all addresses via a direct update
+  private async clearDefaultAddresses(userId: string) {
+    await this.userModel.updateOne(
+      { _id: userId },
+      { $set: { "addresses.$[].isDefault": false } }
+    );
+  }
+
+  //  Helper: unset isDefault on all payment methods via a direct update
+  private async clearDefaultPaymentMethods(userId: string) {
+    await this.userModel.updateOne(
+      { _id: userId },
+      { $set: { "paymentMethods.$[].isDefault": false } }
+    );
   }
 
   // CHANGE PASSWORD

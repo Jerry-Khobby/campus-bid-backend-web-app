@@ -8,29 +8,41 @@ import {
   Delete,
   Patch,
   UseGuards,
+  UseInterceptors,
+  UploadedFiles,
   Request,
+  BadRequestException,
 } from "@nestjs/common";
+import { FilesInterceptor } from "@nestjs/platform-express";
 import {
   ApiTags,
   ApiBearerAuth,
   ApiOperation,
   ApiResponse,
+  ApiConsumes,
 } from "@nestjs/swagger";
 import { ProductsService } from "./products.service";
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
 import { UpdateStockDto } from "./dto/update-stock.dto";
 import { UpdatePriceDto } from "./dto/update-price.dto";
+import { UpdateAvailabilityDto } from "./dto/update-availability.dto";
 import { FilterProductDto } from "./dto/filter-product.dto";
-import { ProductRatingDto } from "./dto/product-rating.dto";
+import { NearbyQueryDto } from "./dto/nearby-query.dto";
 import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
+import { CloudinaryService } from "../uploads/cloudinary.service";
+
+const MAX_PRODUCT_IMAGES = 10;
 
 @ApiTags("Products")
 @Controller("products")
 export class ProductsController {
-  constructor(private readonly productsService: ProductsService) {}
+  constructor(
+    private readonly productsService: ProductsService,
+    private readonly cloudinaryService: CloudinaryService
+  ) {}
 
   // ✅ CREATE PRODUCT (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
@@ -64,6 +76,15 @@ export class ProductsController {
     return { success: true, message: "Product updated successfully", product };
   }
 
+  // ✅ NEARBY PRODUCTS (Public) — must be declared before GET :id
+  @Get("nearby")
+  @ApiOperation({ summary: "Find products from vendors near a location" })
+  @ApiResponse({ status: 200, description: "Nearby products fetched successfully" })
+  async getNearbyProducts(@Query() query: NearbyQueryDto) {
+    const data = await this.productsService.getNearbyProducts(query);
+    return { success: true, message: "Nearby products fetched successfully", ...data };
+  }
+
   // ✅ GET SINGLE PRODUCT (Public)
   @Get(":id")
   @ApiOperation({ summary: "Get product by ID" })
@@ -85,12 +106,16 @@ export class ProductsController {
   // ✅ UPDATE STOCK (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
-  @Post("update-stock")
+  @Patch(":id/stock")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update product stock (Vendor only)" })
   @ApiResponse({ status: 200, description: "Stock updated successfully" })
-  async updateStock(@Request() req, @Body() dto: UpdateStockDto) {
-    const result = await this.productsService.updateStock(dto, req.user.sub);
+  async updateStock(
+    @Param("id") productId: string,
+    @Request() req,
+    @Body() dto: UpdateStockDto
+  ) {
+    const result = await this.productsService.updateStock(productId, req.user.sub, dto);
     return { success: true, message: "Stock updated successfully", ...result };
   }
 
@@ -106,13 +131,41 @@ export class ProductsController {
     return { success: true, message: "Price updated successfully", ...result };
   }
 
-  // ✅ RATE PRODUCT (Student or Public)
-  @Post("rate")
-  @ApiOperation({ summary: "Rate a product (1–5 stars)" })
-  @ApiResponse({ status: 200, description: "Product rated successfully" })
-  async rateProduct(@Body() dto: ProductRatingDto) {
-    const result = await this.productsService.rateProduct(dto);
-    return { success: true, message: "Product rated successfully", ...result };
+  // ✅ UPDATE AVAILABILITY (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Patch(":id/availability")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update product availability (Vendor only)" })
+  @ApiResponse({ status: 200, description: "Availability updated successfully" })
+  async updateAvailability(
+    @Param("id") productId: string,
+    @Request() req,
+    @Body() dto: UpdateAvailabilityDto
+  ) {
+    const product = await this.productsService.updateAvailability(productId, req.user.sub, dto);
+    return { success: true, message: "Availability updated successfully", product };
+  }
+
+  // ✅ ADD PRODUCT IMAGES (Vendor only)
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("vendor")
+  @Post(":id/images")
+  @ApiBearerAuth()
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(FilesInterceptor("images", MAX_PRODUCT_IMAGES))
+  @ApiOperation({ summary: "Add images to an existing product (Vendor only)" })
+  @ApiResponse({ status: 200, description: "Images added successfully" })
+  async addProductImages(
+    @Param("id") productId: string,
+    @Request() req,
+    @UploadedFiles() images: Express.Multer.File[]
+  ) {
+    if (!images?.length) throw new BadRequestException("No image files provided");
+
+    const urls = await this.uploadImages(images);
+    const result = await this.productsService.addProductImages(productId, req.user.sub, urls);
+    return { success: true, message: "Images added successfully", images: result };
   }
 
   // ✅ DELETE PRODUCT (Vendor only)
@@ -125,5 +178,10 @@ export class ProductsController {
   async deleteProduct(@Param("id") productId: string, @Request() req) {
     await this.productsService.deleteProduct(productId, req.user.sub);
     return { success: true, message: "Product deleted successfully" };
+  }
+
+  private async uploadImages(files: Express.Multer.File[]): Promise<string[]> {
+    const uploads = await Promise.all(files.map((file) => this.cloudinaryService.uploadImage(file)));
+    return uploads.map((result: any) => result.secure_url);
   }
 }

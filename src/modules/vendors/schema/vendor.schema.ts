@@ -179,5 +179,8 @@ export const VendorSchema = SchemaFactory.createForClass(Vendor);
 // ✅ Proper GeoJSON Index
 VendorSchema.index({ "location.coordinates": "2dsphere" });
 
+// ✅ Text index for vendor search
+VendorSchema.index({ "profile.businessName": "text", "profile.description": "text" });
+
 // Type alias
 export type VendorDocument = Vendor & Document & { _id: Types.ObjectId };

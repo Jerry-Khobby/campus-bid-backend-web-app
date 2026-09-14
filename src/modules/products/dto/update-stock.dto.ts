@@ -1,11 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsNumber, Min, IsMongoId } from "class-validator";
+import { IsNumber, Min } from "class-validator";
 
 export class UpdateStockDto {
-  @ApiProperty({ description: "Product ID", example: "6531cdef1234567890abcd12" })
-  @IsMongoId()
-  productId: string;
-
   @ApiProperty({ example: 100 })
   @IsNumber()
   @Min(0)

@@ -3,18 +3,33 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
-  InternalServerErrorException,
   ForbiddenException,
+  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { Payment, PaymentDocument } from './schema/payment.schema';
-import { CreatePaymentDto } from './dto/create-payment.dto';
+import { Order, OrderDocument } from '../orders/schema/order.schema';
+import { PaystackService } from './paystack.service';
+import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { PaymentQueryDto } from './dto/payment-query.dto';
+
+const ADMIN_COMMISSION_RATE = 0.1;
+const PESEWAS_PER_CEDI = 100;
+const DEFAULT_PAYSTACK_CALLBACK_URL = 'http://localhost:3000/api/payments/callback';
+const HANDLED_WEBHOOK_EVENTS = ['charge.success', 'charge.failed'];
+
+export interface InitializePaymentResult {
+  paymentId: Types.ObjectId;
+  authorizationUrl: string;
+  accessCode: string;
+  reference: string;
+}
 
 @Injectable()
 export class PaymentsService {
@@ -23,41 +38,147 @@ export class PaymentsService {
   constructor(
     @InjectModel(Payment.name)
     private readonly paymentModel: Model<PaymentDocument>,
+    @InjectModel(Order.name)
+    private readonly orderModel: Model<OrderDocument>,
+    private readonly paystackService: PaystackService,
+    private readonly configService: ConfigService,
   ) {}
 
   // -----------------------------
-  // CREATE PAYMENT
+  // INITIALIZE PAYMENT (student)
   // -----------------------------
-  async createPayment(dto: CreatePaymentDto): Promise<PaymentDocument> {
-    const { orderId, customerId, vendorId, amount } = dto;
+  async initializePayment(
+    customerId: string,
+    dto: InitializePaymentDto,
+    customerEmail: string,
+  ): Promise<InitializePaymentResult> {
+    const order = await this.findOrderForCustomer(dto.orderId, customerId);
+    await this.assertOrderHasNoActivePayment(order._id as Types.ObjectId);
 
-    // Validate ObjectIds
-    [orderId, customerId, vendorId].forEach((id) => {
-      if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ID');
+    const amountInSmallestUnit = this.toSmallestCurrencyUnit(order.pricing.total);
+    const reference = this.generatePaymentReference(order._id as Types.ObjectId);
+    const callbackUrl = this.getPaystackCallbackUrl();
+
+    const transaction = await this.paystackService.initializeTransaction(
+      customerEmail,
+      amountInSmallestUnit,
+      reference,
+      callbackUrl,
+    );
+
+    const payment = await this.createPendingPayment(order, dto.paymentMethod, reference);
+
+    return {
+      paymentId: payment._id as Types.ObjectId,
+      authorizationUrl: transaction.authorization_url,
+      accessCode: transaction.access_code,
+      reference,
+    };
+  }
+
+  private async findOrderForCustomer(orderId: string, customerId: string): Promise<OrderDocument> {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.customerId.toString() !== customerId)
+      throw new ForbiddenException('You cannot pay for this order');
+
+    return order;
+  }
+
+  private async assertOrderHasNoActivePayment(orderId: Types.ObjectId): Promise<void> {
+    const activePayment = await this.paymentModel.findOne({
+      orderId,
+      status: { $ne: 'failed' },
     });
 
-    // Check for duplicate transactionId if provided
-    if (dto.transactionId) {
-      const existing = await this.paymentModel.findOne({ transactionId: dto.transactionId });
-      if (existing) throw new ConflictException('Transaction ID already exists');
-    }
+    if (activePayment) throw new ConflictException('This order already has an active payment');
+  }
 
+  private toSmallestCurrencyUnit(amountInCedis: number): number {
+    return Math.round(amountInCedis * PESEWAS_PER_CEDI);
+  }
+
+  private generatePaymentReference(orderId: Types.ObjectId): string {
+    return `ord_${orderId}_${Date.now()}`;
+  }
+
+  private getPaystackCallbackUrl(): string {
+    const appUrl = this.configService.get<string>('APP_URL');
+    return appUrl ? `${appUrl}/payments/callback` : DEFAULT_PAYSTACK_CALLBACK_URL;
+  }
+
+  private async createPendingPayment(
+    order: OrderDocument,
+    paymentMethod: string,
+    reference: string,
+  ): Promise<PaymentDocument> {
     const payment = new this.paymentModel({
-      ...dto,
-      orderId: new Types.ObjectId(orderId),
-      customerId: new Types.ObjectId(customerId),
-      vendorId: new Types.ObjectId(vendorId),
-      status: 'held',
-      holdStartTime: new Date(),
+      orderId: order._id,
+      customerId: order.customerId,
+      vendorId: order.vendorId,
+      amount: order.pricing.total,
+      paymentMethod,
+      status: 'pending',
+      transactionId: reference,
+      gatewayReference: reference,
     });
 
-    try {
-      const saved = await payment.save();
-      return saved;
-    } catch (err) {
-      this.logger.error('Error creating payment', err);
-      throw new InternalServerErrorException('Failed to create payment');
+    return payment.save();
+  }
+
+  // -----------------------------
+  // PAYSTACK WEBHOOK
+  // -----------------------------
+  async handleWebhook(rawBody: Buffer, signature: string, event: any): Promise<{ received: boolean }> {
+    if (!this.paystackService.verifyWebhookSignature(rawBody, signature))
+      throw new UnauthorizedException('Invalid webhook signature');
+
+    if (!HANDLED_WEBHOOK_EVENTS.includes(event?.event)) return { received: true };
+
+    const payment = await this.paymentModel.findOne({ transactionId: event.data.reference });
+    if (!payment) {
+      this.logger.warn(`Webhook received for unknown reference ${event.data.reference}`);
+      return { received: true };
     }
+
+    if (payment.status !== 'pending') return { received: true };
+
+    if (event.event === 'charge.success') {
+      await this.confirmSuccessfulCharge(payment, event.data.reference);
+    } else {
+      await this.markPaymentFailed(payment, event.data);
+    }
+
+    return { received: true };
+  }
+
+  private async confirmSuccessfulCharge(payment: PaymentDocument, reference: string): Promise<void> {
+    const verified = await this.paystackService.verifyTransaction(reference);
+
+    if (!this.isVerifiedChargeValid(verified, payment.amount)) {
+      this.logger.warn(`Webhook amount/status mismatch for payment ${payment._id}`);
+      return;
+    }
+
+    payment.status = 'held';
+    payment.holdStartTime = new Date();
+    payment.gatewayResponse = verified;
+    await payment.save();
+  }
+
+  private isVerifiedChargeValid(
+    verified: { status: string; amount: number },
+    expectedAmount: number,
+  ): boolean {
+    const expectedAmountInSmallestUnit = this.toSmallestCurrencyUnit(expectedAmount);
+    return verified.status === 'success' && Math.round(verified.amount) === expectedAmountInSmallestUnit;
+  }
+
+  private async markPaymentFailed(payment: PaymentDocument, eventData: Record<string, any>): Promise<void> {
+    payment.status = 'failed';
+    payment.gatewayResponse = eventData;
+    await payment.save();
   }
 
   // -----------------------------
@@ -71,10 +192,15 @@ export class PaymentsService {
   }
 
   // -----------------------------
-  // LIST / FILTER PAYMENTS
+  // LIST / FILTER PAYMENTS (admin)
   // -----------------------------
   async listPayments(query: PaymentQueryDto): Promise<PaymentDocument[]> {
-    const filter: any = {};
+    const filter = this.buildPaymentFilter(query);
+    return this.paymentModel.find(filter).sort({ createdAt: -1 });
+  }
+
+  private buildPaymentFilter(query: PaymentQueryDto): Record<string, unknown> {
+    const filter: Record<string, unknown> = {};
 
     if (query.status) filter.status = query.status;
     if (query.paymentMethod) filter.paymentMethod = query.paymentMethod;
@@ -84,78 +210,91 @@ export class PaymentsService {
       filter.vendorId = new Types.ObjectId(query.vendorId);
     if (query.transactionId) filter.transactionId = query.transactionId;
 
+    return filter;
+  }
+
+  // -----------------------------
+  // PAYMENT HISTORY (any authenticated role)
+  // -----------------------------
+  async getPaymentHistory(userId: string, role: string): Promise<PaymentDocument[]> {
+    const filter = this.buildHistoryFilter(userId, role);
     return this.paymentModel.find(filter).sort({ createdAt: -1 });
+  }
+
+  private buildHistoryFilter(userId: string, role: string): Record<string, unknown> {
+    if (role === 'student') return { customerId: userId };
+    if (role === 'vendor') return { vendorId: userId };
+    return {};
   }
 
   // -----------------------------
   // UPDATE PAYMENT (admin use)
   // -----------------------------
   async updatePayment(paymentId: string, dto: UpdatePaymentDto): Promise<PaymentDocument> {
-    if (!Types.ObjectId.isValid(paymentId)) throw new BadRequestException('Invalid paymentId');
-
-    const payment = await this.paymentModel.findById(paymentId);
-    if (!payment) throw new NotFoundException('Payment not found');
-
+    const payment = await this.findById(paymentId);
     Object.assign(payment, dto);
     await payment.save();
-
     return payment;
   }
 
   // -----------------------------
   // RELEASE PAYMENT (customer confirms)
   // -----------------------------
-// -----------------------------
-// RELEASE PAYMENT (customer confirms)
-// -----------------------------
-async releasePayment(paymentId: string, actorId: string): Promise<PaymentDocument> {
-  const payment = await this.findById(paymentId);
+  async releasePayment(paymentId: string, actorId: string): Promise<PaymentDocument> {
+    const payment = await this.findById(paymentId);
 
-  if (payment.customerId.toString() !== actorId)
-    throw new ForbiddenException('You cannot release this payment');
+    if (payment.customerId.toString() !== actorId)
+      throw new ForbiddenException('You cannot release this payment');
 
-  if (payment.status !== 'held')
-    throw new ConflictException('Payment cannot be released in current state');
+    if (payment.status !== 'held')
+      throw new ConflictException('Payment cannot be released in current state');
 
-  // Commission logic
-  const ADMIN_PERCENTAGE = 0.1; // 10%
-  const adminCommission = payment.amount * ADMIN_PERCENTAGE;
-  const vendorPayout = payment.amount - adminCommission;
+    const { adminCommission, vendorPayout } = this.splitPaymentAmount(payment.amount);
 
-  payment.status = 'released';
-  payment.releaseTime = new Date();
-  payment.adminCommission = adminCommission;
-  payment.vendorPayout = vendorPayout;
+    payment.status = 'released';
+    payment.releaseTime = new Date();
+    payment.adminCommission = adminCommission;
+    payment.vendorPayout = vendorPayout;
+    payment.metadata = {
+      ...(payment.metadata || {}),
+      releasedBy: actorId,
+      releasedAt: new Date(),
+      adminCommission,
+      vendorPayout,
+    };
 
-  // Optional: Add a record for tracking release
-  payment.metadata = {
-    ...(payment.metadata || {}),
-    releasedBy: actorId,
-    releasedAt: new Date(),
-    adminCommission,
-    vendorPayout,
-  };
+    await payment.save();
 
-  await payment.save();
+    this.logger.log(
+      `Payment ${payment._id} released: Admin gets ${adminCommission}, Vendor gets ${vendorPayout}`,
+    );
 
-  this.logger.log(
-    `Payment ${payment._id} released: Admin gets ${adminCommission}, Vendor gets ${vendorPayout}`,
-  );
+    return payment;
+  }
 
-  // 🔜 (Future) — If you integrate Paystack/Stripe later:
-  // await this.gatewayService.sendPayoutToVendor(payment.vendorId, vendorPayout);
+  private splitPaymentAmount(amount: number): { adminCommission: number; vendorPayout: number } {
+    const adminCommission = amount * ADMIN_COMMISSION_RATE;
+    const vendorPayout = amount - adminCommission;
+    return { adminCommission, vendorPayout };
+  }
 
-  return payment;
-}
-
+  private isPaymentParty(payment: PaymentDocument, actorId: string): boolean {
+    return (
+      payment.customerId.toString() === actorId || payment.vendorId.toString() === actorId
+    );
+  }
 
   // -----------------------------
   // REFUND PAYMENT
   // -----------------------------
-  async refundPayment(dto: RefundPaymentDto, actorId: string): Promise<PaymentDocument> {
-    const payment = await this.findById(dto.paymentId);
+  async refundPayment(
+    paymentId: string,
+    dto: RefundPaymentDto,
+    actorId: string,
+  ): Promise<PaymentDocument> {
+    const payment = await this.findById(paymentId);
 
-    if (payment.customerId.toString() !== actorId)
+    if (!this.isPaymentParty(payment, actorId))
       throw new ForbiddenException('You cannot refund this payment');
 
     if (payment.status !== 'held')

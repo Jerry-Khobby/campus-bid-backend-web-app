@@ -5,7 +5,6 @@ import {MongooseModule} from "@nestjs/mongoose";
 import { ConfigModule } from '@nestjs/config';
 import { RedisOptions } from './config/redis-config';
 import { CacheModule } from '@nestjs/cache-manager';
-import { APP_INTERCEPTOR } from '@nestjs/core';
 import { UserModule } from './modules/users/user.module';
 import { VendorModule } from './modules/vendors/vendors.module';
 import { ProductsModule } from './modules/products/products.module';
@@ -15,6 +14,10 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { PaymentsModule } from './modules/payments/payment.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { CategoriesModule } from './modules/categories/categories.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
+import { SearchModule } from './modules/search/search.module';
+import { CloudinaryModule } from './modules/uploads/cloudinary.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
@@ -29,11 +32,12 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     ChatModule,
     PaymentsModule,
     NotificationsModule,
+    CategoriesModule,
+    ReviewsModule,
+    SearchModule,
+    CloudinaryModule,
   ],
   controllers: [AppController],
-  providers: [AppService,{
-    provide: APP_INTERCEPTOR,
-    useClass: CacheModule,
-  }],
+  providers: [AppService],
 })
 export class AppModule {}

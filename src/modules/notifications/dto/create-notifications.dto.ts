@@ -7,8 +7,23 @@ export class CreateNotificationDto {
   @IsEnum(['customer', 'vendor'])
   userType: 'customer' | 'vendor';
 
-  @IsEnum(['order_update', 'new_message', 'flash_sale', 'payment'])
-  type: 'order_update' | 'new_message' | 'flash_sale' | 'payment';
+  @IsEnum([
+    'order_update',
+    'new_message',
+    'flash_sale',
+    'payment',
+    'order_status_changed',
+    'flash_sale_alert',
+    'flash_sale_won',
+  ])
+  type:
+    | 'order_update'
+    | 'new_message'
+    | 'flash_sale'
+    | 'payment'
+    | 'order_status_changed'
+    | 'flash_sale_alert'
+    | 'flash_sale_won';
 
   @IsString()
   @IsNotEmpty()

@@ -2,6 +2,9 @@ import {
   Body,
   Controller,
   Post,
+  Put,
+  Delete,
+  Param,
   Get,
   UseGuards,
   Request,
@@ -22,13 +25,15 @@ import { ChangePasswordDto } from "./dto/change-password.dto";
 import { ForgotPasswordDto } from "./dto/forgot-password.dto";
 import { ResetPasswordDto } from "./dto/reset-password.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
+import { CreateAddressDto } from "./dto/create-address.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
-import { UpdatePaymentMethodDto } from "./dto/update-payment-method.dto";
+import { CreatePaymentMethodDto } from "./dto/create-payment-method.dto";
 import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
 import { AuthGuard } from "@nestjs/passport";
+import { CloudinaryService } from "../uploads/cloudinary.service";
 
 import {FileInterceptor} from "@nestjs/platform-express";
 import { UploadedFile,UseInterceptors } from "@nestjs/common";
@@ -37,7 +42,10 @@ import { UploadedFile,UseInterceptors } from "@nestjs/common";
 @ApiTags("Users")
 @Controller("users")
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly cloudinaryService: CloudinaryService,
+  ) {}
 
   // ✅ REGISTER
   @Post("register")
@@ -120,43 +128,95 @@ export class UserController {
   }
 
   // ✅ UPDATE PROFILE
-@Post("update-profile")
-@UseGuards(AccessTokenGuard, RolesGuard)
-@Roles("student")
-@UseInterceptors(FileInterceptor("profileImage"))
-@ApiBearerAuth()
-@ApiOperation({ summary: "Update user profile (student)" })
-@ApiBody({ type: UpdateProfileDto })
-@ApiResponse({ status: 200, description: "Profile updated successfully" })
-async updateProfile(
-  @Request() req,
-  @UploadedFile() profileImage: Express.Multer.File,
-  @Body() updateProfileDto: UpdateProfileDto
-) {
-  const user = await this.userService.updateUser(
-    req.user.sub,
-    updateProfileDto,
-    profileImage
-  );
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Put("profile")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update user profile fields (student)" })
+  @ApiBody({ type: UpdateProfileDto })
+  @ApiResponse({ status: 200, description: "Profile updated successfully" })
+  async updateProfile(@Request() req, @Body() updateProfileDto: UpdateProfileDto) {
+    const user = await this.userService.updateUser(req.user.sub, updateProfileDto);
+    return {
+      success: true,
+      message: "Profile updated successfully",
+      user,
+    };
+  }
 
-  return {
-    success: true,
-    message: "Profile updated successfully",
-    user,
-  };
-}
+  // ✅ UPDATE PROFILE IMAGE
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Post("profile/image")
+  @UseInterceptors(FileInterceptor("profileImage"))
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Upload/replace the user profile image (student)" })
+  @ApiResponse({ status: 200, description: "Profile image updated successfully" })
+  async updateProfileImage(
+    @Request() req,
+    @UploadedFile() profileImage: Express.Multer.File
+  ) {
+    const uploaded = await this.cloudinaryService.uploadImage(profileImage);
+    const user = await this.userService.updateProfileImage(req.user.sub, uploaded.secure_url);
 
+    return {
+      success: true,
+      message: "Profile image updated successfully",
+      user,
+    };
+  }
+
+  // ✅ GET ADDRESSES
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Get("addresses")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List the authenticated user's addresses (student)" })
+  @ApiResponse({ status: 200, description: "Addresses fetched successfully" })
+  async getAddresses(@Request() req) {
+    const addresses = await this.userService.getAddresses(req.user.sub);
+    return {
+      success: true,
+      message: "Addresses fetched successfully",
+      addresses,
+    };
+  }
+
+  // ✅ ADD ADDRESS
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Post("addresses")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Add a new user address (student)" })
+  @ApiBody({ type: CreateAddressDto })
+  @ApiResponse({ status: 200, description: "Address added successfully" })
+  async addAddress(@Request() req, @Body() createAddressDto: CreateAddressDto) {
+    const addresses = await this.userService.addAddress(req.user.sub, createAddressDto);
+    return {
+      success: true,
+      message: "Address added successfully",
+      addresses,
+    };
+  }
 
   // ✅ UPDATE ADDRESS
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("student")
-  @Post("update-address")
+  @Put("addresses/:id")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Add or update user address (student)" })
+  @ApiOperation({ summary: "Update an existing user address (student)" })
   @ApiBody({ type: UpdateAddressDto })
   @ApiResponse({ status: 200, description: "Address updated successfully" })
-  async updateAddress(@Request() req, @Body() updateAddressDto: UpdateAddressDto) {
-    const addresses = await this.userService.updateAddress(req.user.sub, updateAddressDto);
+  async updateAddress(
+    @Request() req,
+    @Param("id") addressId: string,
+    @Body() updateAddressDto: UpdateAddressDto
+  ) {
+    const addresses = await this.userService.updateAddress(
+      req.user.sub,
+      addressId,
+      updateAddressDto
+    );
     return {
       success: true,
       message: "Address updated successfully",
@@ -164,25 +224,76 @@ async updateProfile(
     };
   }
 
-  // ✅ UPDATE PAYMENT METHOD
+  // ✅ DELETE ADDRESS
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("student")
-  @Post("update-payment-method")
+  @Delete("addresses/:id")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Add or update user payment method (student)" })
-  @ApiBody({ type: UpdatePaymentMethodDto })
-  @ApiResponse({ status: 200, description: "Payment method updated successfully" })
-  async updatePaymentMethod(
+  @ApiOperation({ summary: "Delete a user address (student)" })
+  @ApiResponse({ status: 200, description: "Address deleted successfully" })
+  async deleteAddress(@Request() req, @Param("id") addressId: string) {
+    const addresses = await this.userService.deleteAddress(req.user.sub, addressId);
+    return {
+      success: true,
+      message: "Address deleted successfully",
+      addresses,
+    };
+  }
+
+  // ✅ GET PAYMENT METHODS
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Get("payment-methods")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List the authenticated user's payment methods (student)" })
+  @ApiResponse({ status: 200, description: "Payment methods fetched successfully" })
+  async getPaymentMethods(@Request() req) {
+    const paymentMethods = await this.userService.getPaymentMethods(req.user.sub);
+    return {
+      success: true,
+      message: "Payment methods fetched successfully",
+      paymentMethods,
+    };
+  }
+
+  // ✅ ADD PAYMENT METHOD
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Post("payment-methods")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Add a new user payment method (student)" })
+  @ApiBody({ type: CreatePaymentMethodDto })
+  @ApiResponse({ status: 200, description: "Payment method added successfully" })
+  async addPaymentMethod(
     @Request() req,
-    @Body() updatePaymentMethodDto: UpdatePaymentMethodDto
+    @Body() createPaymentMethodDto: CreatePaymentMethodDto
   ) {
-    const paymentMethods = await this.userService.updatePaymentMethod(
+    const paymentMethods = await this.userService.addPaymentMethod(
       req.user.sub,
-      updatePaymentMethodDto
+      createPaymentMethodDto
     );
     return {
       success: true,
-      message: "Payment method updated successfully",
+      message: "Payment method added successfully",
+      paymentMethods,
+    };
+  }
+
+  // ✅ DELETE PAYMENT METHOD
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("student")
+  @Delete("payment-methods/:id")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Delete a user payment method (student)" })
+  @ApiResponse({ status: 200, description: "Payment method deleted successfully" })
+  async deletePaymentMethod(@Request() req, @Param("id") paymentMethodId: string) {
+    const paymentMethods = await this.userService.deletePaymentMethod(
+      req.user.sub,
+      paymentMethodId
+    );
+    return {
+      success: true,
+      message: "Payment method deleted successfully",
       paymentMethods,
     };
   }
@@ -190,7 +301,7 @@ async updateProfile(
   // ✅ LOGOUT
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("student")
-  @Get("logout")
+  @Post("logout")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Log out the authenticated user (student)" })
   @ApiResponse({ status: 200, description: "User logged out successfully" })

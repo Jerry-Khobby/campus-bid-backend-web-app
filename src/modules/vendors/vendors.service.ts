@@ -23,13 +23,22 @@ import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { UpdateBankDetailsDto } from "./dto/update-bank-details.dto";
 import { UpdateBusinessHoursDto } from "./dto/update-business-hours.dto";
 import { UpdateLocationDto } from "./dto/update-location.dto";
+import { VendorQueryDto } from "./dto/vendor-query.dto";
+import { VendorSalesAnalyticsQueryDto } from "./dto/vendor-sales-analytics-query.dto";
+import { VendorProductAnalyticsQueryDto } from "./dto/vendor-product-analytics-query.dto";
 import { ChangePasswordDto } from "../users/dto/change-password.dto";
 import { ForgotPasswordDto } from "../users/dto/forgot-password.dto";
 import { ResetPasswordDto } from "../users/dto/reset-password.dto";
-import { MailService } from "src/utils/mail.service";
+import { MailService } from "../../utils/mail.service";
 import * as argon2 from "argon2";
 import { ConfigService } from "@nestjs/config";
 import { CloudinaryService } from "../uploads/cloudinary.service";
+import { Product, ProductDocument } from "../products/schema/product.schema";
+import { Order, OrderDocument } from "../orders/schema/order.schema";
+import { ProductsService } from "../products/products.service";
+import { FlashSaleService } from "../flash-sales/flash-sale.service";
+import { FlashSaleStatus } from "../flash-sales/dto/enums";
+import { PayoutsService } from "../payments/payouts.service";
 
 interface CacheVendor {
   id: string;
@@ -59,11 +68,16 @@ export class VendorService {
 
   constructor(
     @InjectModel(Vendor.name) private readonly vendorModel: Model<VendorDocument>,
+    @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
+    @InjectModel(Order.name) private readonly orderModel: Model<OrderDocument>,
     private readonly jwtService: JwtService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly productsService: ProductsService,
+    private readonly flashSaleService: FlashSaleService,
+    private readonly payoutsService: PayoutsService,
   ) {}
 
   // -----------------------
@@ -162,50 +176,54 @@ export class VendorService {
   // -----------------------
   // UPDATE PROFILE
   // -----------------------
-async updateProfile(
-  id: string,
-  dto: UpdateProfileDto,
-  logo?: Express.Multer.File
-): Promise<SafeVendor> {
+async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
   const vendor = await this.vendorModel.findById(id);
   if (!vendor) throw new NotFoundException("Vendor not found");
 
-  //CLOUDINARY UPLOAD
-  let uploadedLogoUrl = null;
-
-  if (logo) {
-    const uploaded = await this.cloudinaryService.uploadImage(logo);
-    uploadedLogoUrl = uploaded.secure_url;
-  }
-
-  //  MERGE OTHER PROFILE FIELDS
-  if (dto) {
-    vendor.profile = {
-      ...vendor.profile,
-      ...dto,
-    };
-  }
-
-  // REPLACE LOGO ONLY IF NEW FILE WAS UPLOADED
-  if (uploadedLogoUrl) {
-    vendor.profile.logo = uploadedLogoUrl;
-  }
-
-  // 4️⃣ SAVE CHANGES
+  vendor.profile = { ...vendor.profile, ...dto };
   await vendor.save();
-
-  // 5️⃣ UPDATE CACHE
-  const vendorId = vendor._id.toString();
-  await this.cacheManager.set(
-    `vendor:${vendor.email}`,
-    { id: vendorId, email: vendor.email },
-    3600
-  );
+  await this.refreshVendorCache(vendor);
 
   this.logger.log(`Vendor profile updated: ${vendor.email}`);
-
   return this.excludePassword(vendor);
 }
+
+  // -----------------------
+  // UPDATE LOGO
+  // -----------------------
+  async updateLogo(id: string, url: string): Promise<{ logo: string }> {
+    const vendor = await this.vendorModel.findById(id);
+    if (!vendor) throw new NotFoundException("Vendor not found");
+
+    vendor.profile.logo = url;
+    await vendor.save();
+
+    this.logger.log(`Vendor logo updated: ${vendor.email}`);
+    return { logo: url };
+  }
+
+  // -----------------------
+  // UPDATE BANNER
+  // -----------------------
+  async updateBanner(id: string, url: string): Promise<{ banner: string }> {
+    const vendor = await this.vendorModel.findById(id);
+    if (!vendor) throw new NotFoundException("Vendor not found");
+
+    vendor.profile.banner = url;
+    await vendor.save();
+
+    this.logger.log(`Vendor banner updated: ${vendor.email}`);
+    return { banner: url };
+  }
+
+  private async refreshVendorCache(vendor: VendorDocument) {
+    const vendorId = vendor._id.toString();
+    await this.cacheManager.set(
+      `vendor:${vendor.email}`,
+      { id: vendorId, email: vendor.email },
+      3600
+    );
+  }
 
 
   // -----------------------
@@ -426,5 +444,280 @@ async handleGoogleLogin(googleUser: {
     });
   }
 }
+
+  // =========================================================
+  // PUBLIC DISCOVERY
+  // =========================================================
+
+  async listVendors(query: VendorQueryDto) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 10);
+
+    return query.latitude != null && query.longitude != null
+      ? this.listVendorsByDistance(query, page, limit)
+      : this.listVendorsBySort(query, page, limit);
+  }
+
+  private buildVendorDiscoveryFilter(category?: string) {
+    return { isActive: true, ...(category && { categories: category }) };
+  }
+
+  private async listVendorsByDistance(query: VendorQueryDto, page: number, limit: number) {
+    const skip = (page - 1) * limit;
+    const matchFilter = this.buildVendorDiscoveryFilter(query.category);
+
+    const pipeline: any[] = [
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [query.longitude, query.latitude] },
+          distanceField: "distance",
+          spherical: true,
+          query: matchFilter,
+          ...(query.maxDistance && { maxDistance: query.maxDistance }),
+        },
+      },
+      { $skip: skip },
+      { $limit: limit },
+    ];
+
+    const [items, total] = await Promise.all([
+      this.vendorModel.aggregate(pipeline),
+      this.vendorModel.countDocuments(matchFilter),
+    ]);
+
+    return { items: items.map((v) => this.toPublicVendor(v)), total, page, limit };
+  }
+
+  private async listVendorsBySort(query: VendorQueryDto, page: number, limit: number) {
+    const skip = (page - 1) * limit;
+    const filter = this.buildVendorDiscoveryFilter(query.category);
+    const sort = this.resolveVendorSort(query.sortBy);
+
+    const [items, total] = await Promise.all([
+      this.vendorModel.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      this.vendorModel.countDocuments(filter),
+    ]);
+
+    return { items: items.map((v) => this.toPublicVendor(v)), total, page, limit };
+  }
+
+  private resolveVendorSort(sortBy?: string): Record<string, 1 | -1> {
+    if (sortBy === "rating") return { "rating.average": -1 };
+    if (sortBy === "name") return { "profile.businessName": 1 };
+    return { createdAt: -1 };
+  }
+
+  async getPublicVendorById(id: string) {
+    const vendor = await this.vendorModel.findOne({ _id: id, isActive: true }).lean();
+    if (!vendor) throw new NotFoundException("Vendor not found");
+
+    return { ...this.toPublicVendor(vendor), isOpen: this.isVendorOpenNow(vendor.businessHours) };
+  }
+
+  private isVendorOpenNow(businessHours: { day: string; openTime?: string; closeTime?: string; isClosed?: boolean }[] = []): boolean {
+    const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
+    const todayHours = businessHours.find((h) => h.day === today);
+    if (!todayHours || todayHours.isClosed || !todayHours.openTime || !todayHours.closeTime) return false;
+
+    const currentTime = new Date().toTimeString().slice(0, 5);
+    return currentTime >= todayHours.openTime && currentTime <= todayHours.closeTime;
+  }
+
+  private toPublicVendor(vendor: any) {
+    return {
+      _id: vendor._id.toString(),
+      profile: { businessName: vendor.profile?.businessName, logo: vendor.profile?.logo },
+      categories: vendor.categories ?? [],
+      rating: vendor.rating ?? { average: 0, count: 0 },
+      stats: { totalOrders: vendor.stats?.totalOrders ?? 0 },
+      location: vendor.location,
+      businessHours: vendor.businessHours ?? [],
+      isVerified: !!vendor.isVerified,
+    };
+  }
+
+  // =========================================================
+  // DASHBOARD
+  // =========================================================
+
+  async getDashboard(vendorId: string) {
+    const [today, thisWeek, thisMonth, allTime] = await Promise.all([
+      this.aggregateOrders(vendorId, this.startOfToday()),
+      this.aggregateOrders(vendorId, this.daysAgo(7)),
+      this.aggregateOrders(vendorId, this.daysAgo(30)),
+      this.aggregateAllTimeOrders(vendorId),
+    ]);
+
+    const [pendingOrders, balances, activeListings, activeFlashSales, recentOrders] = await Promise.all([
+      this.orderModel.countDocuments({ vendorId, status: "pending", createdAt: { $gte: this.startOfToday() } }),
+      this.payoutsService.getVendorBalances(vendorId),
+      this.productModel.countDocuments({ vendorId, isAvailable: true }),
+      this.flashSaleService.getVendorFlashSales(vendorId, { status: FlashSaleStatus.ACTIVE }),
+      this.getRecentOrders(vendorId),
+    ]);
+
+    return {
+      stats: { today, thisWeek, thisMonth, allTime },
+      pendingOrders,
+      pendingBalance: balances.pendingBalance,
+      availableBalance: balances.availableBalance,
+      activeListings,
+      activeFlashSales: activeFlashSales.total,
+      recentOrders,
+    };
+  }
+
+  private startOfToday(): Date {
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    return start;
+  }
+
+  private daysAgo(days: number): Date {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() - days);
+    date.setUTCHours(0, 0, 0, 0);
+    return date;
+  }
+
+  private async aggregateOrders(vendorId: string, since: Date) {
+    const [result] = await this.orderModel.aggregate([
+      { $match: { vendorId: new Types.ObjectId(vendorId), createdAt: { $gte: since } } },
+      { $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: "$pricing.total" } } },
+    ]);
+    return { orders: result?.orders ?? 0, revenue: result?.revenue ?? 0 };
+  }
+
+  private async aggregateAllTimeOrders(vendorId: string) {
+    const base = await this.aggregateOrders(vendorId, new Date(0));
+    const completedOrders = await this.orderModel.countDocuments({ vendorId, status: "completed" });
+    return { ...base, completedOrders };
+  }
+
+  private async getRecentOrders(vendorId: string) {
+    const orders = await this.orderModel
+      .find({ vendorId })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate("customerId", "email profile.firstName profile.lastName")
+      .lean();
+
+    return orders.map((order) => ({
+      orderNumber: order.orderNumber,
+      customer: order.customerId,
+      total: order.pricing?.total ?? 0,
+      status: order.status,
+      createdAt: (order as any).createdAt,
+    }));
+  }
+
+  // =========================================================
+  // ANALYTICS
+  // =========================================================
+
+  async getSalesAnalytics(vendorId: string, query: VendorSalesAnalyticsQueryDto) {
+    const { start, end } = this.resolveAnalyticsRange(query);
+    const [summary, dailyBreakdown, topProducts] = await Promise.all([
+      this.getOrderSummary(vendorId, start, end),
+      this.getDailyBreakdown(vendorId, start, end),
+      this.getTopProducts(vendorId, start, end),
+    ]);
+
+    return { ...summary, dailyBreakdown, topProducts };
+  }
+
+  private resolveAnalyticsRange(query: VendorSalesAnalyticsQueryDto): { start: Date; end: Date } {
+    const end = query.endDate ? new Date(query.endDate) : new Date();
+    if (query.period === "custom" && query.startDate) return { start: new Date(query.startDate), end };
+    return { start: this.periodStart(query.period), end };
+  }
+
+  private periodStart(period?: string): Date {
+    if (period === "week") return this.daysAgo(7);
+    if (period === "month") return this.daysAgo(30);
+    if (period === "year") return this.daysAgo(365);
+    return this.startOfToday();
+  }
+
+  private buildDateMatch(vendorId: string, start: Date, end: Date) {
+    return { vendorId: new Types.ObjectId(vendorId), createdAt: { $gte: start, $lte: end } };
+  }
+
+  private async getOrderSummary(vendorId: string, start: Date, end: Date) {
+    const [result] = await this.orderModel.aggregate([
+      { $match: this.buildDateMatch(vendorId, start, end) },
+      {
+        $group: {
+          _id: null,
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: "$pricing.total" },
+          completedOrders: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+          cancelledOrders: { $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    const totalOrders = result?.totalOrders ?? 0;
+    const totalRevenue = result?.totalRevenue ?? 0;
+    return {
+      totalOrders,
+      completedOrders: result?.completedOrders ?? 0,
+      cancelledOrders: result?.cancelledOrders ?? 0,
+      totalRevenue,
+      averageOrderValue: totalOrders ? Number((totalRevenue / totalOrders).toFixed(2)) : 0,
+    };
+  }
+
+  private getDailyBreakdown(vendorId: string, start: Date, end: Date) {
+    return this.orderModel.aggregate([
+      { $match: this.buildDateMatch(vendorId, start, end) },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          orders: { $sum: 1 },
+          revenue: { $sum: "$pricing.total" },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+  }
+
+  private getTopProducts(vendorId: string, start: Date, end: Date) {
+    return this.orderModel.aggregate([
+      { $match: this.buildDateMatch(vendorId, start, end) },
+      { $unwind: "$items" },
+      {
+        $group: {
+          _id: "$items.productId",
+          unitsSold: { $sum: "$items.quantity" },
+          revenue: { $sum: { $multiply: ["$items.price", "$items.quantity"] } },
+        },
+      },
+      { $sort: { revenue: -1 } },
+      { $limit: 5 },
+      { $lookup: { from: "products", localField: "_id", foreignField: "_id", as: "product" } },
+      { $unwind: "$product" },
+      { $project: { productId: "$_id", name: "$product.name", unitsSold: 1, revenue: 1, _id: 0 } },
+    ]);
+  }
+
+  async getProductAnalytics(vendorId: string, query: VendorProductAnalyticsQueryDto) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 10);
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await Promise.all([
+      this.productModel
+        .find({ vendorId })
+        .select("name views soldCount rating")
+        .sort({ soldCount: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.productModel.countDocuments({ vendorId }),
+    ]);
+
+    return { items, total, page, limit };
+  }
 
 }

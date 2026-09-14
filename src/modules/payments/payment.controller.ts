@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Patch,
+  Put,
   Body,
   Param,
   Query,
@@ -11,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PaymentsService } from './payment.service';
-import { CreatePaymentDto } from './dto/create-payment.dto';
+import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
@@ -28,14 +29,13 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   // ----------------------------
-  // CREATE PAYMENT (student)
+  // INITIALIZE PAYMENT (student)
   // ----------------------------
   @Roles('student')
-  @Post()
-  @ApiOperation({ summary: 'Create a payment (student)' })
-  async create(@Req() req, @Body() dto: CreatePaymentDto) {
-    const customerId = req.user.sub;
-    return this.paymentsService.createPayment({ ...dto, customerId });
+  @Post('initialize')
+  @ApiOperation({ summary: 'Initialize a Paystack payment for an order (student)' })
+  async initialize(@Req() req, @Body() dto: InitializePaymentDto) {
+    return this.paymentsService.initializePayment(req.user.sub, dto, req.user.email);
   }
 
   // ----------------------------
@@ -49,13 +49,21 @@ export class PaymentsController {
   }
 
   // ----------------------------
+  // PAYMENT HISTORY (any authenticated role)
+  // ----------------------------
+  @Get('history')
+  @ApiOperation({ summary: 'List payments for the authenticated user' })
+  async history(@Req() req) {
+    return this.paymentsService.getPaymentHistory(req.user.sub, req.user.role);
+  }
+
+  // ----------------------------
   // GET ONE (admin/student/vendor)
   // ----------------------------
   @Roles('admin', 'student', 'vendor')
   @Get(':id')
   @ApiOperation({ summary: 'Get a payment by ID' })
-  async findOne(@Param('id') id: string, @Req() req) {
-    const actor = req.user;
+  async findOne(@Param('id') id: string) {
     return this.paymentsService.findById(id);
   }
 
@@ -76,19 +84,17 @@ export class PaymentsController {
   @Patch(':id/release')
   @ApiOperation({ summary: 'Release held payment (student confirms delivery)' })
   async release(@Param('id') id: string, @Req() req) {
-    const actorId = req.user.sub;
-    return this.paymentsService.releasePayment(id, actorId);
+    return this.paymentsService.releasePayment(id, req.user.sub);
   }
 
   // ----------------------------
   // REFUND PAYMENT (student)
   // ----------------------------
   @Roles('student')
-  @Post('refund')
+  @Put(':id/refund')
   @ApiOperation({ summary: 'Refund held payment (student disputes)' })
-  async refund(@Body() dto: RefundPaymentDto, @Req() req) {
-    const actorId = req.user.sub;
-    return this.paymentsService.refundPayment(dto, actorId);
+  async refund(@Param('id') id: string, @Body() dto: RefundPaymentDto, @Req() req) {
+    return this.paymentsService.refundPayment(id, dto, req.user.sub);
   }
 
   // ----------------------------

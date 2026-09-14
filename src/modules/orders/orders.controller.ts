@@ -22,6 +22,9 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto.';
 import { CancelOrderDto } from './dto/cancel-order.dto';
 import { RateOrderDto } from './dto/rate-order.dto';
 import { OrderQueryDto } from './dto/order-query.dto';
+import { AcceptOrderDto } from './dto/accept-order.dto';
+import { RejectOrderDto } from './dto/reject-order.dto';
+import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
@@ -94,6 +97,54 @@ export class OrdersController {
   async rateOrder(@Request() req, @Param('id') id: string, @Body() dto: RateOrderDto) {
     const data = await this.ordersService.rateOrder(id, req.user.sub, dto);
     return { success: true, message: 'Order rated successfully', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('vendor')
+  @Patch(':id/accept')
+  @ApiBearerAuth()
+  async acceptOrder(@Request() req, @Param('id') id: string, @Body() dto: AcceptOrderDto) {
+    const data = await this.ordersService.acceptOrder(id, req.user.sub, dto);
+    return { success: true, message: 'Order accepted successfully', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('vendor')
+  @Patch(':id/reject')
+  @ApiBearerAuth()
+  async rejectOrder(@Request() req, @Param('id') id: string, @Body() dto: RejectOrderDto) {
+    const data = await this.ordersService.rejectOrder(id, req.user.sub, dto);
+    return { success: true, message: 'Order rejected successfully', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('vendor')
+  @Patch(':id/mark-delivered')
+  @ApiBearerAuth()
+  async markDelivered(@Request() req, @Param('id') id: string) {
+    const data = await this.ordersService.markDelivered(id, req.user.sub);
+    return { success: true, message: 'Order marked as delivered', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('student')
+  @Post(':id/confirm-delivery')
+  @ApiBearerAuth()
+  async confirmDelivery(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() dto: ConfirmDeliveryDto,
+  ) {
+    const data = await this.ordersService.confirmDelivery(id, req.user.sub, dto);
+    return { success: true, message: 'Delivery confirmed successfully', data };
+  }
+
+  @UseGuards(AccessTokenGuard)
+  @Get(':id/track')
+  @ApiBearerAuth()
+  async trackOrder(@Request() req, @Param('id') id: string) {
+    const data = await this.ordersService.trackOrder(id, req.user.sub, req.user.role);
+    return { success: true, message: 'Order tracking info fetched successfully', data };
   }
 
   @UseGuards(AccessTokenGuard, RolesGuard)

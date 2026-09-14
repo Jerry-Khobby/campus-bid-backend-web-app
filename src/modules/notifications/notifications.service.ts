@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -6,7 +6,7 @@ import type { Cache } from 'cache-manager';
 
 import { Notification,NotificationDocument } from './schema/notifications.schema';
 import { CreateNotificationDto } from './dto/create-notifications.dto';
-import { MarkAsReadDto } from './dto/mark-as-read.dto';
+import { NotificationsGateway } from './notifications.gateway';
 import { Vendor } from '../vendors/schema/vendor.schema';
 import { User } from '../users/schema/user.schema';
 
@@ -24,6 +24,8 @@ export class NotificationsService {
 
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
+
+    private readonly gateway: NotificationsGateway,
   ) {}
 
   private unreadKey(userId: string) {
@@ -92,10 +94,34 @@ export class NotificationsService {
   }
 
   /**
+   * Send a notification to a user and push it over the socket in real time
+   */
+  async notify(
+    userId: string,
+    userType: 'customer' | 'vendor',
+    type: string,
+    title: string,
+    message: string,
+    data?: Record<string, any>,
+  ) {
+    const notification = await this.create({
+      userId,
+      userType,
+      type: type as any,
+      title,
+      message,
+      data,
+    });
+
+    this.gateway.sendToUser(userId, notification);
+    return notification;
+  }
+
+  /**
    * Mark one notification as read
    */
-  async markAsRead(dto: MarkAsReadDto) {
-    const notif = await this.notificationModel.findById(dto.notificationId);
+  async markAsRead(notificationId: string) {
+    const notif = await this.notificationModel.findById(notificationId);
     if (!notif) throw new NotFoundException('Notification not found');
 
     if (!notif.isRead) {
@@ -128,5 +154,20 @@ export class NotificationsService {
     await this.cacheManager.set(this.unreadKey(userId), 0, 3600);
 
     return { message: 'All notifications marked as read' };
+  }
+
+  /**
+   * Delete a notification owned by the requesting user
+   */
+  async deleteNotification(notificationId: string, userId: string) {
+    const notif = await this.notificationModel.findById(notificationId);
+    if (!notif) throw new NotFoundException('Notification not found');
+
+    if (notif.userId.toString() !== userId) {
+      throw new ForbiddenException('You cannot delete this notification');
+    }
+
+    await notif.deleteOne();
+    return { message: 'Notification deleted' };
   }
 }

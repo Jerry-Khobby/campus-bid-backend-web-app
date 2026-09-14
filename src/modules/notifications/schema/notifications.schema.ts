@@ -13,10 +13,25 @@ export class Notification {
 
   @Prop({
     type: String,
-    enum: ['order_update', 'new_message', 'flash_sale', 'payment'],
+    enum: [
+      'order_update',
+      'new_message',
+      'flash_sale',
+      'payment',
+      'order_status_changed',
+      'flash_sale_alert',
+      'flash_sale_won',
+    ],
     required: true,
   })
-  type: 'order_update' | 'new_message' | 'flash_sale' | 'payment';
+  type:
+    | 'order_update'
+    | 'new_message'
+    | 'flash_sale'
+    | 'payment'
+    | 'order_status_changed'
+    | 'flash_sale_alert'
+    | 'flash_sale_won';
 
   @Prop({ type: String, required: true })
   title: string;

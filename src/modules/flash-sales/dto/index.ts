@@ -8,3 +8,5 @@ export * from './cancel-flash-sale.dto';
 export * from './complete-flash-sale.dto';
 export * from './flash-sale-query.dto';
 export * from './flash-sale-response.dto';
+export * from './vendor-flash-sale-query.dto';
+export * from './my-bids-query.dto';

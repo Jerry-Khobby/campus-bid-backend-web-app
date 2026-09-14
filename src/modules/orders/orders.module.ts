@@ -11,6 +11,8 @@ import { OrderSchema,Order } from "./schema/order.schema";
 import { Product,ProductSchema } from "../products/schema/product.schema";
 import { User,UserSchema } from "../users/schema/user.schema";
 import { Vendor,VendorSchema } from "../vendors/schema/vendor.schema";
+import { NotificationsModule } from "../notifications/notifications.module";
+import { PaymentsModule } from "../payments/payment.module";
 
 @Module({
 
@@ -32,6 +34,8 @@ import { Vendor,VendorSchema } from "../vendors/schema/vendor.schema";
           signOptions: { expiresIn: '15m' },
         }),
       }),
+      NotificationsModule,
+      PaymentsModule,
     ],
     controllers: [OrdersController],
     providers: [OrdersService, AccessTokenStrategy, RefreshTokenStrategy],
