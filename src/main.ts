@@ -5,6 +5,23 @@ import {SwaggerModule, DocumentBuilder} from "@nestjs/swagger";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
+
+  // The three frontends (customer/vendor/admin) each run on their own port in
+  // dev, so every browser request to this API is cross-origin. Nest doesn't
+  // enable CORS by default — without this, every fetch() from any of them
+  // fails the preflight check before a single request reaches a controller.
+  const allowedOrigins = (
+    process.env.CORS_ORIGINS ?? 'http://localhost:5000,http://localhost:5001,http://localhost:5002'
+  )
+    .split(',')
+    .map((origin) => origin.trim());
+
+  app.enableCors({
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
+
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
     forbidNonWhitelisted: true,
