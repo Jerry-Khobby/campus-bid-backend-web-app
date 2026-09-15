@@ -24,7 +24,7 @@ Collection: `vendors` (Mongoose model `Vendor`, `{ timestamps: true }`).
 | `bankDetails` | `BankDetails` | default `{}` | See sub-table |
 | `refreshToken` | String | default `null` | argon2 hash of current refresh token |
 | `isVerified` | Boolean | default `false` | Set `true` automatically for Google sign-ups |
-| `isActive` | Boolean | default `true` | Filters public discovery/profile lookups |
+| `isActive` | Boolean | default `false` | A new self-registration starts pending; an admin must call `PATCH /vendors/:id/approve` before the vendor appears in public discovery/profile lookups |
 
 **Profile sub-schema** (`_id: false`)
 
@@ -84,11 +84,11 @@ Collection: `vendors` (Mongoose model `Vendor`, `{ timestamps: true }`).
 - `profile.businessName`, `profile.description` — compound `text` index (declared but no endpoint in this module issues a `$text` search; discovery search only filters by `category`, geo distance, or sorts)
 
 ## Authentication
-Same pattern as Users: `@UseGuards(AccessTokenGuard, RolesGuard)` with `@Roles("vendor")` on vendor-only routes. `AccessTokenGuard` validates the bearer token via the shared Passport `jwt` strategy against `JWT_SECRET` (note: `VendorModule`'s own `JwtModule.registerAsync` configures a *different* default secret, `JWT_ACCESS_SECRET`, but this is moot because `VendorService.getTokens` explicitly signs with `JWT_SECRET`/`JWT_REFRESH_SECRET`, matching what the shared strategies verify against). `RefreshTokenGuard` + `@Roles("vendor")` protects the refresh endpoint (unlike the Users module, which puts no `@Roles` on its refresh route).
+Same pattern as Users: `@UseGuards(AccessTokenGuard, RolesGuard)` with `@Roles("vendor")` on vendor-only routes. `AccessTokenGuard` validates the bearer token via the shared Passport `jwt` strategy against `JWT_SECRET` (note: `VendorModule`'s own `JwtModule.registerAsync` configures a *different* default secret, `JWT_ACCESS_SECRET`, but this is moot because `VendorService.getTokens` explicitly signs with `JWT_SECRET`/`JWT_REFRESH_SECRET`, matching what the shared strategies verify against). `RefreshTokenGuard` + `@Roles("vendor")` protects the refresh endpoint (unlike the Users module, which puts no `@Roles` on its refresh route). Three routes instead use `@Roles("admin")` — see **Admin** below; the `admin` role lives on the `User` schema (`docs/users.md`), not on `Vendor`, since admins authenticate through `POST /users/login` like any other user.
 
 Public routes: `register`, `login`, `GET /vendors` (search/browse), `GET /vendors/:id/products`, `forgot-password`, `reset-password`, `google`, `google/callback`, `GET /vendors/:id` (public profile).
 
-**Routing-order note:** `GET /vendors/:id` is declared last in the controller, after every other `GET`/literal route (including `:id/products`), specifically so the catch-all `:id` param route doesn't shadow more specific routes like `/vendors/profile` or `/vendors/dashboard`. This is intentional and called out in the source with a comment.
+**Routing-order note:** `GET /vendors/:id` is declared last in the controller, after every other `GET`/literal route (including `:id/products`, `admin`, and the `PATCH :id/approve|suspend` admin routes), specifically so the catch-all `:id` param route doesn't shadow more specific routes like `/vendors/profile` or `/vendors/dashboard`. This is intentional and called out in the source with a comment.
 
 ## Endpoints
 
@@ -272,7 +272,28 @@ Public routes: `register`, `login`, `GET /vendors` (search/browse), `GET /vendor
 - **Auth:** public entry point guarded by `AuthGuard('google')`
 - **Response:** **none/undefined.** `VendorService.handleGoogleLogin` finds-or-creates the vendor record but has no `return` statement — the controller method returns whatever the service resolves to, which is `undefined`. This means the vendor google callback currently sends an empty response body and **never issues JWTs**, unlike the equivalent Users module flow which does. This is a functional gap, not a documentation nuance — the Swagger example on this route (in the source) shows a `{ success, user, accessToken, refreshToken }` shape that the code does not actually produce.
 - **Errors:** 500 `InternalServerErrorException` if Google doesn't supply an email.
-- On first login it creates a vendor with `authProvider: 'google'`, `role: 'vendor'`, `isVerified: true`, `profile.businessName` set to `"<firstName> <lastName>"`, `profile.logo` from the Google photo (or `null`), and `profile.phoneNumber` set to `""` (the schema requires `phoneNumber`, so this satisfies validation with an empty string). If a `local` vendor with that email already exists without `oauth.googleId`, it is upgraded in place the same way as the Users module.
+- On first login it creates a vendor with `authProvider: 'google'`, `role: 'vendor'`, `isVerified: true`, `profile.businessName` set to `"<firstName> <lastName>"`, `profile.logo` from the Google photo (or `null`), and `profile.phoneNumber` set to `""` (the schema requires `phoneNumber`, so this satisfies validation with an empty string). If a `local` vendor with that email already exists without `oauth.googleId`, it is upgraded in place the same way as the Users module. Like local registration, this never sets `isActive` explicitly, so a Google-created vendor also starts pending admin approval.
+
+### Admin
+Vendors always self-register (there is no admin-create-vendor endpoint); these three routes let an admin review and gate that self-service pipeline. All three require `@Roles("admin")` — a `User` document (not `Vendor`) with `role: "admin"`, obtained by logging in via `POST /users/login`. See `docs/users.md` for how an account gets promoted to admin (there is no public way to self-register as one).
+
+#### `GET /api/vendors/admin`
+- **Auth:** authenticated (`admin`)
+- **Request:** `AdminVendorQueryDto` (query) — `search` (optional, matches `profile.businessName` or `email`, case-insensitive), `page` (default 1), `limit` (default 20)
+- **Response:** `{ success: true, message: "Vendors fetched successfully", data: { items: SafeVendor[], total, page, limit } }`
+- Unlike `GET /vendors`, this does **not** filter by `isActive` — it returns pending, active, and suspended vendors alike, with the full `SafeVendor` shape (email, `isActive`, `isVerified`, bank details, etc.) rather than the trimmed public shape.
+
+#### `PATCH /api/vendors/:id/approve`
+- **Auth:** authenticated (`admin`)
+- **Response:** `{ success: true, message: "Vendor approved successfully", vendor: SafeVendor }`
+- **Errors:** 404 if no vendor exists with that id
+- Sets `isActive: true`, making the vendor visible in public discovery/profile lookups.
+
+#### `PATCH /api/vendors/:id/suspend`
+- **Auth:** authenticated (`admin`)
+- **Response:** `{ success: true, message: "Vendor suspended successfully", vendor: SafeVendor }`
+- **Errors:** 404 if no vendor exists with that id
+- Sets `isActive: false`, the same flag a brand-new pending vendor has — a suspended vendor and a not-yet-approved vendor are indistinguishable by this field alone; both simply don't appear publicly until approved again.
 
 ## Business Rules & Notes
 - **Google OAuth callback is broken (functional gap):** as detailed above, `POST/GET /api/vendors/google/callback` never returns tokens or a body — a vendor cannot actually complete sign-in through this route today, even though the Swagger annotation implies it works exactly like the Users module's version.

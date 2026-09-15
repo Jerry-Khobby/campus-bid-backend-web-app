@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Put,
+  Patch,
   Body,
   Get,
   Param,
@@ -24,6 +25,7 @@ import { UpdateBankDetailsDto } from "./dto/update-bank-details.dto";
 import { UpdateBusinessHoursDto } from "./dto/update-business-hours.dto";
 import { UpdateLocationDto } from "./dto/update-location.dto";
 import { VendorQueryDto } from "./dto/vendor-query.dto";
+import { AdminVendorQueryDto } from "./dto/admin-vendor-query.dto";
 import { VendorSalesAnalyticsQueryDto } from "./dto/vendor-sales-analytics-query.dto";
 import { VendorProductAnalyticsQueryDto } from "./dto/vendor-product-analytics-query.dto";
 import { ChangePasswordDto } from "../users/dto/change-password.dto";
@@ -382,6 +384,39 @@ export class VendorController {
   async googleCallback(@Req() req) {
     // req.user comes from GoogleStrategy.validate()
     return this.vendorService.handleGoogleLogin(req.user);
+  }
+
+  // ✅ ADMIN — list every vendor regardless of approval/active state
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Get("admin")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List all vendors, including pending/suspended (Admin only)" })
+  async listVendorsForAdmin(@Query() query: AdminVendorQueryDto) {
+    const data = await this.vendorService.listAllVendorsForAdmin(query);
+    return { success: true, message: "Vendors fetched successfully", data };
+  }
+
+  // ✅ ADMIN — approve a pending vendor, making it publicly visible
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Patch(":id/approve")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Approve a vendor (Admin only)" })
+  async approveVendor(@Param("id") id: string) {
+    const vendor = await this.vendorService.approveVendor(id);
+    return { success: true, message: "Vendor approved successfully", vendor };
+  }
+
+  // ✅ ADMIN — suspend a vendor, hiding it from public discovery
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Patch(":id/suspend")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Suspend a vendor (Admin only)" })
+  async suspendVendor(@Param("id") id: string) {
+    const vendor = await this.vendorService.suspendVendor(id);
+    return { success: true, message: "Vendor suspended successfully", vendor };
   }
 
   // ✅ VENDOR PUBLIC PROFILE (Public) — must stay last: catches any single-segment /vendors/:id path

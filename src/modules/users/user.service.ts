@@ -92,7 +92,8 @@ export class UserService {
     const uploaded = await this.cloudinaryService.uploadImage(uploadImage);
     profileImageUrl = uploaded.secure_url;
   }
-    // Save user
+    // Save user — role is intentionally never taken from the client; every
+    // self-registration is a student, matching the schema default.
     const newUser = new this.userModel({
       ...createUserDto,
       email,

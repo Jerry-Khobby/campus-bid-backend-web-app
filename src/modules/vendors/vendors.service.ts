@@ -24,6 +24,7 @@ import { UpdateBankDetailsDto } from "./dto/update-bank-details.dto";
 import { UpdateBusinessHoursDto } from "./dto/update-business-hours.dto";
 import { UpdateLocationDto } from "./dto/update-location.dto";
 import { VendorQueryDto } from "./dto/vendor-query.dto";
+import { AdminVendorQueryDto } from "./dto/admin-vendor-query.dto";
 import { VendorSalesAnalyticsQueryDto } from "./dto/vendor-sales-analytics-query.dto";
 import { VendorProductAnalyticsQueryDto } from "./dto/vendor-product-analytics-query.dto";
 import { ChangePasswordDto } from "../users/dto/change-password.dto";
@@ -512,6 +513,48 @@ async handleGoogleLogin(googleUser: {
     if (!vendor) throw new NotFoundException("Vendor not found");
 
     return { ...this.toPublicVendor(vendor), isOpen: this.isVendorOpenNow(vendor.businessHours) };
+  }
+
+  // =========================================================
+  // ADMIN
+  // =========================================================
+
+  /** Every vendor regardless of isActive/isVerified — the public list/lookup above deliberately excludes these. */
+  async listAllVendorsForAdmin(query: AdminVendorQueryDto) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 20);
+    const skip = (page - 1) * limit;
+
+    const filter = query.search
+      ? {
+          $or: [
+            { "profile.businessName": { $regex: query.search, $options: "i" } },
+            { email: { $regex: query.search, $options: "i" } },
+          ],
+        }
+      : {};
+
+    const [vendors, total] = await Promise.all([
+      this.vendorModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.vendorModel.countDocuments(filter),
+    ]);
+
+    return { items: vendors.map((vendor) => this.excludePassword(vendor)), total, page, limit };
+  }
+
+  async approveVendor(id: string): Promise<SafeVendor> {
+    return this.setVendorActive(id, true);
+  }
+
+  async suspendVendor(id: string): Promise<SafeVendor> {
+    return this.setVendorActive(id, false);
+  }
+
+  private async setVendorActive(id: string, isActive: boolean): Promise<SafeVendor> {
+    const vendor = await this.vendorModel.findByIdAndUpdate(id, { isActive }, { new: true });
+    if (!vendor) throw new NotFoundException("Vendor not found");
+
+    return this.excludePassword(vendor);
   }
 
   private isVendorOpenNow(businessHours: { day: string; openTime?: string; closeTime?: string; isClosed?: boolean }[] = []): boolean {

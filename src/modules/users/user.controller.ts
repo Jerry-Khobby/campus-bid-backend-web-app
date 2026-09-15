@@ -300,10 +300,10 @@ export class UserController {
 
   // ✅ LOGOUT
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles("student")
+  @Roles("student", "admin")
   @Post("logout")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Log out the authenticated user (student)" })
+  @ApiOperation({ summary: "Log out the authenticated user (student or admin)" })
   @ApiResponse({ status: 200, description: "User logged out successfully" })
   async logout(@Request() req) {
     await this.userService.logOut(req.user.sub);

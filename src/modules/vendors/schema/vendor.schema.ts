@@ -168,7 +168,9 @@ export class Vendor extends Document {
   @Prop({ default: false })
   isVerified: boolean;
 
-  @Prop({ default: true })
+  // A new self-registration starts pending; an admin must approve it
+  // (PATCH /vendors/:id/approve) before it appears in public discovery.
+  @Prop({ default: false })
   isActive: boolean;
 }
 
