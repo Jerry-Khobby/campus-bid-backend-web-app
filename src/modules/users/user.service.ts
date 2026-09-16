@@ -17,6 +17,7 @@ import * as bcrypt from "bcrypt";
 import { JwtService } from "@nestjs/jwt";
 import { randomBytes } from "crypto";
 import { User, UserDocument } from "./schema/user.schema";
+import { Order, OrderDocument } from "../orders/schema/order.schema";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { LoginDto } from "./dto/login.dto";
 import { ChangePasswordDto } from "./dto/change-password.dto";
@@ -26,6 +27,7 @@ import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { CreateAddressDto } from "./dto/create-address.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { CreatePaymentMethodDto } from "./dto/create-payment-method.dto";
+import { AdminUserQueryDto } from "./dto/admin-user-query.dto";
 import { MailService } from "../../utils/mail.service";
 import { ConfigService } from "@nestjs/config";
 import * as argon2 from "argon2";
@@ -58,6 +60,7 @@ export class UserService {
 
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectModel(Order.name) private readonly orderModel: Model<OrderDocument>,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
@@ -153,6 +156,7 @@ export class UserService {
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) throw new UnauthorizedException("Invalid email or password");
+    if (!user.isActive) throw new ForbiddenException("This account has been suspended");
 
     // Generate tokens
     const tokens = await this.getTokens(user._id.toString(), user.email,user.role);
@@ -517,6 +521,81 @@ export class UserService {
   private excludePassword(user: UserDocument): SafeUser {
     const userObj = user.toObject ? user.toObject() : user;
     const { password, ...rest } = userObj;
+    return rest as SafeUser;
+  }
+
+  // =========================================================
+  // ADMIN
+  // =========================================================
+
+  /** Every student account, with order totals merged in — the admin "Customers" list. */
+  async listAllUsersForAdmin(query: AdminUserQueryDto) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Number(query.limit) || 20);
+    const skip = (page - 1) * limit;
+
+    const filter: Record<string, any> = { role: "student" };
+    if (query.search) {
+      filter.$or = [
+        { "profile.firstName": { $regex: query.search, $options: "i" } },
+        { "profile.lastName": { $regex: query.search, $options: "i" } },
+        { email: { $regex: query.search, $options: "i" } },
+        { "profile.university": { $regex: query.search, $options: "i" } },
+      ];
+    }
+
+    const [users, total] = await Promise.all([
+      this.userModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.userModel.countDocuments(filter),
+    ]);
+
+    const orderTotals = await this.getOrderTotalsByCustomer(users.map((user) => user._id as Types.ObjectId));
+
+    const items = users.map((user) => ({
+      ...this.excludeSensitiveFields(user),
+      ...(orderTotals.get(user._id.toString()) ?? { totalOrders: 0, totalSpent: 0 }),
+    }));
+
+    return { items, total, page, limit };
+  }
+
+  private async getOrderTotalsByCustomer(
+    customerIds: Types.ObjectId[],
+  ): Promise<Map<string, { totalOrders: number; totalSpent: number }>> {
+    if (customerIds.length === 0) return new Map();
+
+    const results = await this.orderModel.aggregate([
+      { $match: { customerId: { $in: customerIds } } },
+      { $group: { _id: "$customerId", totalOrders: { $sum: 1 }, totalSpent: { $sum: "$pricing.total" } } },
+    ]);
+
+    return new Map(
+      results.map((result) => [
+        result._id.toString(),
+        { totalOrders: result.totalOrders, totalSpent: result.totalSpent },
+      ]),
+    );
+  }
+
+  async approveUser(id: string): Promise<SafeUser> {
+    return this.setUserActive(id, true);
+  }
+
+  async suspendUser(id: string): Promise<SafeUser> {
+    return this.setUserActive(id, false);
+  }
+
+  private async setUserActive(id: string, isActive: boolean): Promise<SafeUser> {
+    const user = await this.userModel.findByIdAndUpdate(id, { isActive }, { new: true });
+    if (!user) throw new NotFoundException("User not found");
+
+    return this.excludeSensitiveFields(user);
+  }
+
+  /** Like excludePassword, but also strips the refreshToken hash — used only for admin-facing responses. */
+  private excludeSensitiveFields(user: UserDocument): SafeUser {
+    const userObj = user.toObject ? user.toObject() : user;
+    const { password, refreshToken, ...rest } = userObj;
     return rest as SafeUser;
   }
 

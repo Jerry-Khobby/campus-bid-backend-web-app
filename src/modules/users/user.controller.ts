@@ -3,9 +3,11 @@ import {
   Controller,
   Post,
   Put,
+  Patch,
   Delete,
   Param,
   Get,
+  Query,
   UseGuards,
   Request,
   Req,
@@ -28,6 +30,7 @@ import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { CreateAddressDto } from "./dto/create-address.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { CreatePaymentMethodDto } from "./dto/create-payment-method.dto";
+import { AdminUserQueryDto } from "./dto/admin-user-query.dto";
 import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
@@ -369,5 +372,38 @@ async googleCallback(@Req() req) {
   // req.user comes from GoogleStrategy.validate()
   return this.userService.handleGoogleLogin(req.user);
 }
+
+  // ✅ ADMIN — list every customer with order totals
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Get("admin")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List all customers (Admin only)" })
+  async listUsersForAdmin(@Query() query: AdminUserQueryDto) {
+    const data = await this.userService.listAllUsersForAdmin(query);
+    return { success: true, message: "Customers fetched successfully", data };
+  }
+
+  // ✅ ADMIN — reactivate a suspended customer
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Patch(":id/approve")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Reactivate a customer account (Admin only)" })
+  async approveUser(@Param("id") id: string) {
+    const user = await this.userService.approveUser(id);
+    return { success: true, message: "Customer reactivated successfully", user };
+  }
+
+  // ✅ ADMIN — suspend a customer, blocking further logins
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Patch(":id/suspend")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Suspend a customer account (Admin only)" })
+  async suspendUser(@Param("id") id: string) {
+    const user = await this.userService.suspendUser(id);
+    return { success: true, message: "Customer suspended successfully", user };
+  }
 
 }

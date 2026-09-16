@@ -8,6 +8,7 @@ import { Types } from "mongoose";
 
 import { UserService } from "./user.service";
 import { User } from "./schema/user.schema";
+import { Order } from "../orders/schema/order.schema";
 import { MailService } from "../../utils/mail.service";
 import { CloudinaryService } from "../uploads/cloudinary.service";
 
@@ -36,11 +37,15 @@ describe("UserService", () => {
       findByIdAndUpdate: jest.fn(),
       updateOne: jest.fn(),
     };
+    const orderModel = {
+      aggregate: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UserService,
         { provide: getModelToken(User.name), useValue: userModel },
+        { provide: getModelToken(Order.name), useValue: orderModel },
         { provide: CACHE_MANAGER, useValue: { get: jest.fn(), set: jest.fn(), del: jest.fn() } },
         { provide: JwtService, useValue: { signAsync: jest.fn() } },
         { provide: MailService, useValue: { sendEmail: jest.fn() } },

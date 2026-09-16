@@ -18,6 +18,7 @@ import { CategoriesModule } from './modules/categories/categories.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { SearchModule } from './modules/search/search.module';
 import { CloudinaryModule } from './modules/uploads/cloudinary.module';
+import { AdminModule } from './modules/admin/admin.module';
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
@@ -36,6 +37,7 @@ import { CloudinaryModule } from './modules/uploads/cloudinary.module';
     ReviewsModule,
     SearchModule,
     CloudinaryModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],
