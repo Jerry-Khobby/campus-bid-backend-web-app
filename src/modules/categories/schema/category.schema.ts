@@ -31,7 +31,10 @@ function toSlug(name: string): string {
     .replace(/[^a-z0-9-]/g, "");
 }
 
-CategorySchema.pre("save", function (next) {
+// Must run in the "validate" phase, not "save" — Mongoose validates required
+// fields (including slug) before pre("save") hooks ever run, so setting it
+// there would always be one step too late.
+CategorySchema.pre("validate", function (next) {
   if (this.isModified("name")) {
     this.slug = toSlug(this.name);
   }
