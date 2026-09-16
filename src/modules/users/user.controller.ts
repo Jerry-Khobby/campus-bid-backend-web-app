@@ -83,10 +83,10 @@ export class UserController {
 
   // ✅ GET PROFILE
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles("student")
+  @Roles("student", "admin")
   @Get("profile")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Get authenticated user profile (student)" })
+  @ApiOperation({ summary: "Get authenticated user profile" })
   @ApiResponse({ status: 200, description: "Profile fetched successfully" })
   async getProfile(@Request() req) {
     const user = await this.userService.getUserProfile(req.user.sub);
@@ -99,10 +99,10 @@ export class UserController {
 
   // ✅ CHANGE PASSWORD
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles("student")
+  @Roles("student", "admin")
   @Post("change-password")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Change user password (student)" })
+  @ApiOperation({ summary: "Change user password" })
   @ApiBody({ type: ChangePasswordDto })
   @ApiResponse({ status: 200, description: "Password updated successfully" })
   async changePassword(
@@ -132,10 +132,10 @@ export class UserController {
 
   // ✅ UPDATE PROFILE
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles("student")
+  @Roles("student", "admin")
   @Put("profile")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Update user profile fields (student)" })
+  @ApiOperation({ summary: "Update user profile fields" })
   @ApiBody({ type: UpdateProfileDto })
   @ApiResponse({ status: 200, description: "Profile updated successfully" })
   async updateProfile(@Request() req, @Body() updateProfileDto: UpdateProfileDto) {
@@ -149,11 +149,11 @@ export class UserController {
 
   // ✅ UPDATE PROFILE IMAGE
   @UseGuards(AccessTokenGuard, RolesGuard)
-  @Roles("student")
+  @Roles("student", "admin")
   @Post("profile/image")
   @UseInterceptors(FileInterceptor("profileImage"))
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Upload/replace the user profile image (student)" })
+  @ApiOperation({ summary: "Upload/replace the user profile image" })
   @ApiResponse({ status: 200, description: "Profile image updated successfully" })
   async updateProfileImage(
     @Request() req,
