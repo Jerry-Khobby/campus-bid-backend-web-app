@@ -255,6 +255,7 @@ describe('FlashSaleService', () => {
         sort: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
+        populate: jest.fn().mockReturnThis(),
         exec: jest.fn().mockResolvedValue([buildSale()]),
       });
       flashSaleModel.countDocuments.mockResolvedValue(1);

@@ -306,7 +306,13 @@ export class FlashSaleService {
     const filter = { vendorId, ...(query.status && { status: query.status }) };
 
     const [items, total] = await Promise.all([
-      this.flashSaleModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
+      this.flashSaleModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('productId', 'name images')
+        .exec(),
       this.flashSaleModel.countDocuments(filter),
     ]);
 
