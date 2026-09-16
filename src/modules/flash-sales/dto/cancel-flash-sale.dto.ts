@@ -1,8 +1,8 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsEnum, IsNotEmpty } from 'class-validator';
 import { FlashSaleReason } from './enums';
 
 export class CancelFlashSaleDto {
-  @IsString()
+  @IsEnum(FlashSaleReason)
   @IsNotEmpty()
   reason: FlashSaleReason;
 }
