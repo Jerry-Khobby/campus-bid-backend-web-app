@@ -74,10 +74,11 @@ export class OrdersController {
   @Patch(':id/status')
   @ApiBearerAuth()
   async updateOrderStatus(
+    @Request() req,
     @Param('id') id: string,
     @Body() dto: UpdateOrderStatusDto,
   ) {
-    const data = await this.ordersService.updateOrderStatus(id, dto.status);
+    const data = await this.ordersService.updateOrderStatus(id, req.user.sub, dto.status);
     return { success: true, message: `Order status updated to ${dto.status}`, data };
   }
 

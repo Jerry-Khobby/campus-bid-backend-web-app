@@ -186,9 +186,9 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
   // -------------------------
   // UPDATE STATUS (Vendor/Admin)
   // -------------------------
-  async updateOrderStatus(orderId: string, status: OrderStatus): Promise<OrderDocument> {
-    const order = await this.orderModel.findById(orderId);
-    if (!order) throw new NotFoundException('Order not found');
+  async updateOrderStatus(orderId: string, vendorId: string, status: OrderStatus): Promise<OrderDocument> {
+    const order = await this.findOrderOrFail(orderId);
+    this.assertVendorOwnsOrder(order, vendorId);
 
     order.status = status;
     order.statusHistory.push({
