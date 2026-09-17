@@ -4,7 +4,9 @@ import { ConfigService } from '@nestjs/config';
 import { Strategy, VerifyCallback, Profile } from 'passport-google-oauth20';
 
 @Injectable()
-export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
+// Named distinctly from the users module's GoogleStrategy — see the comment
+// there for why sharing the name 'google' broke both flows.
+export class GoogleStrategy extends PassportStrategy(Strategy, 'google-vendor') {
   constructor(private configService: ConfigService) {
     const clientID = configService.get<string>('GOOGLE_CLIENT_ID');
     const clientSecret = configService.get<string>('GOOGLE_CLIENT_SECRET');
