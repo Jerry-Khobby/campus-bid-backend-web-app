@@ -444,6 +444,16 @@ async handleGoogleLogin(googleUser: {
       role: "vendor",
     });
   }
+
+  const vendorId = (vendor._id as Types.ObjectId).toString();
+  const tokens = await this.getTokens(vendorId, vendor.email, vendor.role);
+  await this.updateRefreshToken(vendorId, tokens.refreshToken);
+
+  return {
+    success: true,
+    vendor: this.excludePassword(vendor),
+    ...tokens,
+  };
 }
 
   // =========================================================

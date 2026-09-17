@@ -10,7 +10,10 @@ import {
   Request,
   UseGuards,
   Req,
+  Res,
 } from "@nestjs/common";
+import type { Response } from "express";
+import { ConfigService } from "@nestjs/config";
 import {
   ApiTags,
   ApiBearerAuth,
@@ -57,6 +60,7 @@ export class VendorController {
     private readonly flashSaleService: FlashSaleService,
     private readonly ordersService: OrdersService,
     private readonly payoutsService: PayoutsService,
+    private readonly configService: ConfigService,
   ) {}
 
   // ✅ REGISTER (Public)
@@ -353,7 +357,7 @@ export class VendorController {
     description: 'Redirects to Google OAuth',
   })
   @Get('google')
-  @UseGuards(AuthGuard('google'))
+  @UseGuards(AuthGuard('google-vendor'))
   googleAuth() {
     // Passport handles redirect automatically
   }
@@ -380,10 +384,14 @@ export class VendorController {
     },
   })
   @Get('google/callback')
-  @UseGuards(AuthGuard('google'))
-  async googleCallback(@Req() req) {
-    // req.user comes from GoogleStrategy.validate()
-    return this.vendorService.handleGoogleLogin(req.user);
+  @UseGuards(AuthGuard('google-vendor'))
+  async googleCallback(@Req() req, @Res() res: Response) {
+    // req.user comes from GoogleStrategy.validate(). The browser is
+    // mid-redirect from Google, so it can't read a JSON response here — hand
+    // the tokens off via a redirect to a frontend page that stores them.
+    const { accessToken, refreshToken } = await this.vendorService.handleGoogleLogin(req.user);
+    const appUrl = this.configService.get<string>('VENDOR_APP_URL') ?? 'http://localhost:5002';
+    res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
   }
 
   // ✅ ADMIN — list every vendor regardless of approval/active state

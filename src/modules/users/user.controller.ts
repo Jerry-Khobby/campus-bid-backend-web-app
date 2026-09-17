@@ -11,7 +11,10 @@ import {
   UseGuards,
   Request,
   Req,
+  Res,
 } from "@nestjs/common";
+import type { Response } from "express";
+import { ConfigService } from "@nestjs/config";
 import {
   ApiTags,
   ApiOperation,
@@ -48,6 +51,7 @@ export class UserController {
   constructor(
     private readonly userService: UserService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly configService: ConfigService,
   ) {}
 
   // ✅ REGISTER
@@ -340,7 +344,7 @@ export class UserController {
   description: 'Redirects to Google OAuth',
 })
 @Get('google')
-@UseGuards(AuthGuard('google'))
+@UseGuards(AuthGuard('google-user'))
 googleAuth() {
   // Passport handles redirect automatically
 }
@@ -367,10 +371,14 @@ googleAuth() {
   },
 })
 @Get('google/callback')
-@UseGuards(AuthGuard('google'))
-async googleCallback(@Req() req) {
-  // req.user comes from GoogleStrategy.validate()
-  return this.userService.handleGoogleLogin(req.user);
+@UseGuards(AuthGuard('google-user'))
+async googleCallback(@Req() req, @Res() res: Response) {
+  // req.user comes from GoogleStrategy.validate(). The browser is mid-redirect
+  // from Google, so the frontend can't read a JSON response here — hand the
+  // tokens off via a redirect to a frontend page that stores them instead.
+  const { accessToken, refreshToken } = await this.userService.handleGoogleLogin(req.user);
+  const appUrl = this.configService.get<string>('APP_URL') ?? 'http://localhost:5000';
+  res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
 }
 
   // ✅ ADMIN — list every customer with order totals
