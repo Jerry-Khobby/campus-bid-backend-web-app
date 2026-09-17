@@ -14,6 +14,12 @@ function withSort<T>(docs: T[]) {
   return result;
 }
 
+function withSortAndPopulate<T>(docs: T[]) {
+  const result: any = [...docs];
+  result.sort = jest.fn().mockReturnValue({ populate: jest.fn().mockResolvedValue(docs) });
+  return result;
+}
+
 describe('PayoutsService', () => {
   let service: PayoutsService;
   let paymentModel: any;
@@ -69,7 +75,7 @@ describe('PayoutsService', () => {
 
   describe('getHeldPayments', () => {
     it('returns the held payments and their total', async () => {
-      paymentModel.find.mockReturnValue(withSort([{ amount: 40 }, { amount: 60 }]));
+      paymentModel.find.mockReturnValue(withSortAndPopulate([{ amount: 40 }, { amount: 60 }]));
 
       const result = await service.getHeldPayments(VENDOR_ID);
 

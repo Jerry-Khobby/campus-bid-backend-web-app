@@ -1,6 +1,15 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+// NOTE: Payment/Order documents store vendorId/customerId as plain strings,
+// not cast ObjectIds — createOrder/createPendingPayment never explicitly
+// cast them and the schema's declared ObjectId type isn't enforced on
+// existing data. Aggregation $match stages don't apply schema casting at
+// all, so wrapping vendorId in `new Types.ObjectId(...)` here compares an
+// ObjectId against stored strings and silently matches nothing. Querying
+// with the plain string (as the rest of the codebase already does
+// successfully, e.g. orders.service.ts's getOrders) is what actually works
+// against the real data.
 import { Payment, PaymentDocument } from './schema/payment.schema';
 import { Payout, PayoutDocument } from './schema/payout.schema';
 import { Vendor, VendorDocument } from '../vendors/schema/vendor.schema';
@@ -28,11 +37,8 @@ export class PayoutsService {
   // -----------------------------
   async getVendorBalances(vendorId: string): Promise<VendorBalances> {
     const [pendingBalance, availableBalance] = await Promise.all([
-      this.sumPaymentsAmount({ vendorId: new Types.ObjectId(vendorId), status: 'held' }, '$amount'),
-      this.sumPaymentsAmount(
-        { vendorId: new Types.ObjectId(vendorId), status: 'released', payoutId: null },
-        '$vendorPayout',
-      ),
+      this.sumPaymentsAmount({ vendorId, status: 'held' }, '$amount'),
+      this.sumPaymentsAmount({ vendorId, status: 'released', payoutId: null }, '$vendorPayout'),
     ]);
 
     return { pendingBalance, availableBalance };
@@ -52,8 +58,9 @@ export class PayoutsService {
   // -----------------------------
   async getHeldPayments(vendorId: string): Promise<{ payments: PaymentDocument[]; totalHeld: number }> {
     const payments = await this.paymentModel
-      .find({ vendorId: new Types.ObjectId(vendorId), status: 'held' })
-      .sort({ createdAt: -1 });
+      .find({ vendorId, status: 'held' })
+      .sort({ createdAt: -1 })
+      .populate('orderId', 'orderNumber');
 
     const totalHeld = payments.reduce((sum, payment) => sum + payment.amount, 0);
 
@@ -65,7 +72,7 @@ export class PayoutsService {
   // -----------------------------
   async requestPayout(vendorId: string): Promise<PayoutDocument> {
     const releasedPayments = await this.paymentModel.find({
-      vendorId: new Types.ObjectId(vendorId),
+      vendorId,
       status: 'released',
       payoutId: null,
     });
@@ -78,7 +85,7 @@ export class PayoutsService {
     const paymentIds = releasedPayments.map((payment) => payment._id as Types.ObjectId);
 
     const payout = await this.payoutModel.create({
-      vendorId: new Types.ObjectId(vendorId),
+      vendorId,
       amount,
       paymentIds,
       bankSnapshot: vendor.bankDetails,
@@ -113,6 +120,6 @@ export class PayoutsService {
   // LIST PAYOUTS (vendor)
   // -----------------------------
   async listPayouts(vendorId: string): Promise<PayoutDocument[]> {
-    return this.payoutModel.find({ vendorId: new Types.ObjectId(vendorId) }).sort({ createdAt: -1 });
+    return this.payoutModel.find({ vendorId }).sort({ createdAt: -1 });
   }
 }
