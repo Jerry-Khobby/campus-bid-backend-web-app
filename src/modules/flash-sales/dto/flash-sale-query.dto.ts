@@ -1,4 +1,5 @@
 import { IsOptional, IsMongoId, IsEnum, IsDateString, IsNumber, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { Types } from 'mongoose';
 import { FlashSaleStatus } from './enums';
 
@@ -24,11 +25,13 @@ export class FlashSaleQueryDto {
   endBefore?: Date;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   minBid?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   maxBid?: number;
