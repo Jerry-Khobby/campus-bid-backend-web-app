@@ -591,6 +591,12 @@ async handleGoogleLogin(googleUser: {
 
   // =========================================================
   // DASHBOARD
+  // NOTE: Order/Payment/FlashSale documents store vendorId as a plain string
+  // (never explicitly cast on creation), while Product documents store it as
+  // a real ObjectId. Aggregation $match stages never cast, and plain .find()
+  // filters here don't either — so Order/Payment/FlashSale queries must pass
+  // vendorId as-is, while Product queries must wrap it in `new
+  // Types.ObjectId(vendorId)`. Mixing these up silently returns zero results.
   // =========================================================
 
   async getDashboard(vendorId: string) {
@@ -604,7 +610,7 @@ async handleGoogleLogin(googleUser: {
     const [pendingOrders, balances, activeListings, activeFlashSales, recentOrders] = await Promise.all([
       this.orderModel.countDocuments({ vendorId, status: "pending", createdAt: { $gte: this.startOfToday() } }),
       this.payoutsService.getVendorBalances(vendorId),
-      this.productModel.countDocuments({ vendorId, isAvailable: true }),
+      this.productModel.countDocuments({ vendorId: new Types.ObjectId(vendorId), isAvailable: true }),
       this.flashSaleService.getVendorFlashSales(vendorId, { status: FlashSaleStatus.ACTIVE }),
       this.getRecentOrders(vendorId),
     ]);
@@ -635,7 +641,7 @@ async handleGoogleLogin(googleUser: {
 
   private async aggregateOrders(vendorId: string, since: Date) {
     const [result] = await this.orderModel.aggregate([
-      { $match: { vendorId: new Types.ObjectId(vendorId), createdAt: { $gte: since } } },
+      { $match: { vendorId, createdAt: { $gte: since } } },
       { $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: "$pricing.total" } } },
     ]);
     return { orders: result?.orders ?? 0, revenue: result?.revenue ?? 0 };
@@ -693,7 +699,7 @@ async handleGoogleLogin(googleUser: {
   }
 
   private buildDateMatch(vendorId: string, start: Date, end: Date) {
-    return { vendorId: new Types.ObjectId(vendorId), createdAt: { $gte: start, $lte: end } };
+    return { vendorId, createdAt: { $gte: start, $lte: end } };
   }
 
   private async getOrderSummary(vendorId: string, start: Date, end: Date) {
@@ -758,16 +764,17 @@ async handleGoogleLogin(googleUser: {
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.max(1, Number(query.limit) || 10);
     const skip = (page - 1) * limit;
+    const vendorObjectId = new Types.ObjectId(vendorId);
 
     const [items, total] = await Promise.all([
       this.productModel
-        .find({ vendorId })
+        .find({ vendorId: vendorObjectId })
         .select("name views soldCount rating")
         .sort({ soldCount: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      this.productModel.countDocuments({ vendorId }),
+      this.productModel.countDocuments({ vendorId: vendorObjectId }),
     ]);
 
     return { items, total, page, limit };
