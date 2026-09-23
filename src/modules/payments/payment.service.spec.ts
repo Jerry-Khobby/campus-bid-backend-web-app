@@ -235,7 +235,8 @@ describe('PaymentsService', () => {
   describe('listPayments', () => {
     it('builds a filter from the provided query fields', async () => {
       const sort = jest.fn().mockResolvedValue([]);
-      paymentModel.find.mockReturnValue({ sort });
+      const populate = jest.fn().mockReturnThis();
+      paymentModel.find.mockReturnValue({ populate, sort });
 
       await service.listPayments({
         status: 'held',
@@ -256,7 +257,8 @@ describe('PaymentsService', () => {
 
     it('applies no filter when the query is empty', async () => {
       const sort = jest.fn().mockResolvedValue([]);
-      paymentModel.find.mockReturnValue({ sort });
+      const populate = jest.fn().mockReturnThis();
+      paymentModel.find.mockReturnValue({ populate, sort });
 
       await service.listPayments({} as any);
 

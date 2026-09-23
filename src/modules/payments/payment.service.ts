@@ -200,7 +200,11 @@ export class PaymentsService {
   // -----------------------------
   async listPayments(query: PaymentQueryDto): Promise<PaymentDocument[]> {
     const filter = this.buildPaymentFilter(query);
-    return this.paymentModel.find(filter).sort({ createdAt: -1 });
+    return this.paymentModel
+      .find(filter)
+      .populate('customerId', 'email profile.firstName profile.lastName')
+      .populate('vendorId', 'email profile.businessName')
+      .sort({ createdAt: -1 });
   }
 
   private buildPaymentFilter(query: PaymentQueryDto): Record<string, unknown> {
