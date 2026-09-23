@@ -34,7 +34,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payment.service';
 
 const MINUTES_TO_MILLISECONDS = 60_000;
-const ORDER_CACHE_TTL_SECONDS = 300;
+const ORDER_CACHE_TTL_MS = 300_000;
 
 @Injectable()
 export class OrdersService {
@@ -99,7 +99,7 @@ export class OrdersService {
       });
 
       const saved = await order.save();
-      await this.cacheManager.set(`order:${saved._id}`, saved, 600);
+      await this.cacheManager.set(`order:${saved._id}`, saved, 600_000);
 
       this.logger.log(`🛒 Order created by ${customer.email} for vendor ${vendor.email}`);
       return saved;
@@ -131,7 +131,7 @@ export class OrdersService {
       .sort({ createdAt: -1 })
       .exec();
 
-    await this.cacheManager.set(cacheKey, orders, 300);
+    await this.cacheManager.set(cacheKey, orders, 300_000);
     return orders;
   }
 
@@ -164,7 +164,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
       throw new NotFoundException("Order not found");
     }
 
-  await this.cacheManager.set(cacheKey, order, 300);
+  await this.cacheManager.set(cacheKey, order, 300_000);
   return order;
 }
 
@@ -177,7 +177,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
 
     Object.assign(order, dto);
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 600);
+    await this.cacheManager.set(`order:${orderId}`, updated, 600_000);
 
     this.logger.log(`🔄 Order updated: ${orderId}`);
     return updated;
@@ -198,7 +198,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     });
 
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 600);
+    await this.cacheManager.set(`order:${orderId}`, updated, 600_000);
 
     this.logger.log(`🚚 Order status updated: ${orderId} → ${status}`);
     return updated;
@@ -228,7 +228,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     }
 
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 300);
+    await this.cacheManager.set(`order:${orderId}`, updated, 300_000);
 
     this.logger.log(`❌ Order cancelled: ${orderId}`);
     return updated;
@@ -268,7 +268,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     };
 
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 300);
+    await this.cacheManager.set(`order:${orderId}`, updated, 300_000);
 
     this.logger.log(`⭐ Order rated: ${orderId}`);
     return updated;
@@ -291,7 +291,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
         note: 'Auto-completed by system',
       });
       await order.save();
-      await this.cacheManager.set(`order:${order._id}`, order, 300);
+      await this.cacheManager.set(`order:${order._id}`, order, 300_000);
       count++;
     }
 
@@ -474,7 +474,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
 
   private async saveAndCache(order: OrderDocument): Promise<OrderDocument> {
     const updated = await order.save();
-    await this.cacheManager.set(`order:${updated._id}`, updated, ORDER_CACHE_TTL_SECONDS);
+    await this.cacheManager.set(`order:${updated._id}`, updated, ORDER_CACHE_TTL_MS);
     return updated;
   }
 

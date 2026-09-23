@@ -58,7 +58,7 @@ export class ChatService implements OnModuleInit {
     });
 
     if (conversation) {
-      await this.cacheManager.set(cacheKey, conversation, 600);
+      await this.cacheManager.set(cacheKey, conversation, 600_000);
       return conversation;
     }
 
@@ -72,7 +72,7 @@ export class ChatService implements OnModuleInit {
       isActive: true,
     });
 
-    await this.cacheManager.set(cacheKey, created, 600);
+    await this.cacheManager.set(cacheKey, created, 600_000);
     return created;
   }
 
@@ -87,7 +87,7 @@ export class ChatService implements OnModuleInit {
     const convo = await this.conversationModel.findById(conversationId);
     if (!convo) throw new NotFoundException('Conversation not found');
 
-    await this.cacheManager.set(cacheKey, convo, 600);
+    await this.cacheManager.set(cacheKey, convo, 600_000);
     return convo;
   }
 
@@ -123,7 +123,7 @@ export class ChatService implements OnModuleInit {
     const locked = await this.cacheManager.get(lockKey);
     if (locked) throw new ForbiddenException('Message is being processed, try again');
 
-    await this.cacheManager.set(lockKey, 'locked', 3); // lock for 3 seconds
+    await this.cacheManager.set(lockKey, 'locked', 3_000); // lock for 3 seconds
 
     try {
       const convo = await this.conversationModel.findById(conversationId);

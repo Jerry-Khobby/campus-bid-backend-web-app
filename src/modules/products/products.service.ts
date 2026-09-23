@@ -175,7 +175,7 @@ export class ProductsService {
     if (!product) throw new NotFoundException("Product not found");
 
     const safe = this.toSafeProduct(product);
-    await this.cacheManager.set(cacheKey, safe, 60);
+    await this.cacheManager.set(cacheKey, safe, 60_000);
 
     return safe;
   }
@@ -212,7 +212,7 @@ export class ProductsService {
     ]);
 
     const items = rawItems.map((r) => this.toSafeProductFromObject(r));
-    await this.cacheManager.set(cacheKey, { items, total },60);
+    await this.cacheManager.set(cacheKey, { items, total }, 60_000);
 
     return { items, total, page, limit };
   }

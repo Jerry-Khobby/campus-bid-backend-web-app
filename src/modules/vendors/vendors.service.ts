@@ -128,7 +128,7 @@ export class VendorService {
       id: vendorId,
       email: saved.email,
     };
-    await this.cacheManager.set(`vendor:${email}`, cacheVendor, 3600);
+    await this.cacheManager.set(`vendor:${email}`, cacheVendor, 3_600_000);
 
     const { accessToken, refreshToken } = await this.getTokens(vendorId, saved.email,vendor.role);
     await this.updateRefreshToken(vendorId, refreshToken);
@@ -159,7 +159,7 @@ export class VendorService {
     const { accessToken, refreshToken } = await this.getTokens(vendorId, vendor.email,vendor.role);
     await this.updateRefreshToken(vendorId, refreshToken);
 
-    await this.cacheManager.set(`vendor:${email}`, { id: vendorId, email }, 3600);
+    await this.cacheManager.set(`vendor:${email}`, { id: vendorId, email }, 3_600_000);
 
     this.logger.log(`Vendor logged in: ${email}`);
     return { vendor: this.excludePassword(vendor), accessToken, refreshToken };
@@ -222,7 +222,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     await this.cacheManager.set(
       `vendor:${vendor.email}`,
       { id: vendorId, email: vendor.email },
-      3600
+      3_600_000
     );
   }
 
@@ -238,7 +238,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     await vendor.save();
 
     const vendorId = (vendor._id as Types.ObjectId).toString();
-    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3_600_000);
 
     this.logger.log(`Location updated: ${vendor.email}`);
     return vendor.location;
@@ -255,7 +255,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     await vendor.save();
 
     const vendorId = (vendor._id as Types.ObjectId).toString();
-    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3_600_000);
 
     this.logger.log(`Business hours updated: ${vendor.email}`);
     return vendor.businessHours;
@@ -272,7 +272,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     await vendor.save();
 
     const vendorId = (vendor._id as Types.ObjectId).toString();
-    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3600);
+    await this.cacheManager.set(`vendor:${vendor.email}`, { id: vendorId, email: vendor.email }, 3_600_000);
 
     this.logger.log(`Bank details updated: ${vendor.email}`);
     return vendor.bankDetails;
@@ -308,7 +308,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     const resetToken = randomBytes(32).toString("hex");
     const vendorId = (vendor._id as Types.ObjectId).toString();
 
-    await this.cacheManager.set(`vendor-reset:${resetToken}`, vendorId, 900);
+    await this.cacheManager.set(`vendor-reset:${resetToken}`, vendorId, 900_000);
 
     const resetLink = `https://your-vendor-dashboard.com/reset-password?token=${resetToken}`;
     const html = `

@@ -65,7 +65,7 @@ export class FlashSaleService {
       });
 
       const saved = await flashSale.save();
-      await this.cacheManager.set(`flash-sale:${saved._id}`, saved, 600);
+      await this.cacheManager.set(`flash-sale:${saved._id}`, saved, 600_000);
 
       this.logger.log(`✅ Flash sale created for product: ${dto.productId}`);
       return saved;
@@ -100,7 +100,7 @@ export class FlashSaleService {
       .populate('vendorId productId currentBidder winner', '-password')
       .exec();
 
-    await this.cacheManager.set(cacheKey, sales, 300);
+    await this.cacheManager.set(cacheKey, sales, 300_000);
     return sales;
   }
 
@@ -119,7 +119,7 @@ export class FlashSaleService {
 
     if (!sale) throw new NotFoundException('Flash sale not found');
 
-    await this.cacheManager.set(cacheKey, sale, 300);
+    await this.cacheManager.set(cacheKey, sale, 300_000);
     return sale;
   }
 
@@ -133,7 +133,7 @@ export class FlashSaleService {
     Object.assign(sale, dto);
     const updated = await sale.save();
 
-    await this.cacheManager.set(`flash-sale:${id}`, updated, 600);
+    await this.cacheManager.set(`flash-sale:${id}`, updated, 600_000);
     this.logger.log(`🔄 Flash sale updated: ${id}`);
 
     return updated;
@@ -158,7 +158,7 @@ export class FlashSaleService {
       this.applyBid(sale, userId, dto.amount);
 
       const updated = await sale.save();
-      await this.cacheManager.set(`flash-sale:${flashSaleId}`, updated, 600);
+      await this.cacheManager.set(`flash-sale:${flashSaleId}`, updated, 600_000);
       await this.notifyOutbidUser(sale, previousBidder, previousBid, userId, dto.amount);
 
       this.logger.log(`💰 New bid placed: ${dto.amount} by ${userId} on ${flashSaleId}`);
@@ -171,7 +171,7 @@ export class FlashSaleService {
   private async acquireBidLock(lockKey: string) {
     const cachedLock = await this.cacheManager.get(lockKey);
     if (cachedLock) throw new ForbiddenException('Bid is being processed, try again shortly');
-    await this.cacheManager.set(lockKey, 'locked', 5);
+    await this.cacheManager.set(lockKey, 'locked', 5_000);
   }
 
   private assertSaleIsActive(sale: FlashSaleDocument) {
@@ -228,7 +228,7 @@ export class FlashSaleService {
     sale.status = FlashSaleStatus.CANCELLED;
     sale.reason = dto.reason;
     const updated = await sale.save();
-    await this.cacheManager.set(`flash-sale:${flashSaleId}`, updated, 300);
+    await this.cacheManager.set(`flash-sale:${flashSaleId}`, updated, 300_000);
     return updated;
   }
 
@@ -250,7 +250,7 @@ export class FlashSaleService {
     sale.reason = FlashSaleReason.CLOSING_TIME;
 
     const updated = await sale.save();
-    await this.cacheManager.set(`flash-sale:${dto.flashSaleId}`, updated, 300);
+    await this.cacheManager.set(`flash-sale:${dto.flashSaleId}`, updated, 300_000);
     await this.notifyWinner(updated);
     return updated;
   }
@@ -346,7 +346,7 @@ export class FlashSaleService {
     for (const sale of upcoming) {
       sale.status = FlashSaleStatus.ACTIVE;
       await sale.save();
-      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300);
+      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300_000);
       count++;
     }
 
@@ -370,7 +370,7 @@ export class FlashSaleService {
       sale.status = FlashSaleStatus.COMPLETED;
       sale.reason = FlashSaleReason.CLOSING_TIME;
       await sale.save();
-      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300);
+      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300_000);
       count++;
     }
 

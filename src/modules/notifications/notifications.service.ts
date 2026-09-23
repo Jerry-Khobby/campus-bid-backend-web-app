@@ -60,7 +60,7 @@ export class NotificationsService {
 
     // Update unread counter
     const current = (await this.cacheManager.get<number>(this.unreadKey(dto.userId))) || 0;
-    await this.cacheManager.set(this.unreadKey(dto.userId), current + 1, 3600);
+    await this.cacheManager.set(this.unreadKey(dto.userId), current + 1, 3_600_000);
 
     return notification;
   }
@@ -81,7 +81,7 @@ export class NotificationsService {
       .lean()
       .exec();
 
-    await this.cacheManager.set(cacheKey, notifications, 300);
+    await this.cacheManager.set(cacheKey, notifications, 300_000);
     return notifications;
   }
 
@@ -135,7 +135,7 @@ export class NotificationsService {
       await this.cacheManager.set(
         this.unreadKey(String(notif.userId)),
         Math.max(current - 1, 0),
-        3600,
+        3_600_000,
       );
     }
 
@@ -151,7 +151,7 @@ export class NotificationsService {
       { isRead: true, readAt: new Date() },
     );
 
-    await this.cacheManager.set(this.unreadKey(userId), 0, 3600);
+    await this.cacheManager.set(this.unreadKey(userId), 0, 3_600_000);
 
     return { message: 'All notifications marked as read' };
   }

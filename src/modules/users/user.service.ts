@@ -120,7 +120,7 @@ export class UserService {
       id: savedUser._id.toString(),
       email: savedUser.email,
     };
-    await this.cacheManager.set(`user:${email}`, cacheUser, 3600);
+    await this.cacheManager.set(`user:${email}`, cacheUser, 3_600_000);
 
     // Generate tokens
     const tokens = await this.getTokens(savedUser._id.toString(), savedUser.email,savedUser.role);
@@ -167,7 +167,7 @@ export class UserService {
       id: user._id.toString(),
       email: user.email,
     };
-    await this.cacheManager.set(`user:${email}`, cacheUser, 3600);
+    await this.cacheManager.set(`user:${email}`, cacheUser, 3_600_000);
 
     const safeUser = this.excludePassword(user);
 
@@ -406,7 +406,7 @@ export class UserService {
     if (!user) throw new NotFoundException("No account found for this email");
 
     const resetToken = randomBytes(32).toString("hex");
-    await this.cacheManager.set(`reset:${resetToken}`, user._id.toString(), 900); // 15min
+    await this.cacheManager.set(`reset:${resetToken}`, user._id.toString(), 900_000); // 15min
 
     const resetLink = `https://your-frontend-app.com/reset-password?token=${resetToken}`;
     const html = `
