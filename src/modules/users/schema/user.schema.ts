@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 
 @Schema({ timestamps: true })
 export class User extends Document {
@@ -92,7 +92,7 @@ export class User extends Document {
   }[];
 
   // Saved items (references to Product)
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Product' }], default: [] })
+  @Prop({ type: [{ type: SchemaTypes.ObjectId, ref: 'Product' }], default: [] })
   savedItems: Types.ObjectId[];
 
   // Payment methods

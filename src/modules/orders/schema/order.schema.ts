@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 export type OrderDocument = Order & Document;
@@ -9,22 +9,22 @@ export class Order {
   @Prop({ unique: true, required: true })
   orderNumber: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'User', required: true, index: true })
   customerId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Vendor', required: true, index: true })
   vendorId: Types.ObjectId;
 
   @Prop({
     type: [
       {
-        productId: { type: Types.ObjectId, ref: 'Product', required: true },
+        productId: { type: SchemaTypes.ObjectId, ref: 'Product', required: true },
         productName: { type: String, required: true, trim: true },
         productImage: { type: String },
         quantity: { type: Number, required: true, min: 1 },
         price: { type: Number, required: true, min: 0 },
         isFlashSale: { type: Boolean, default: false },
-        flashSaleId: { type: Types.ObjectId, ref: 'FlashSale' },
+        flashSaleId: { type: SchemaTypes.ObjectId, ref: 'FlashSale' },
       },
     ],
     required: true,
@@ -117,7 +117,7 @@ export class Order {
   })
   statusHistory: { status: string; timestamp: Date; note?: string }[];
 
-  @Prop({ type: Types.ObjectId, ref: 'Payment' })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Payment' })
   paymentId?: Types.ObjectId;
 
   @Prop() estimatedDeliveryTime?: Date;

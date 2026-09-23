@@ -1,17 +1,17 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 
 export type PayoutDocument = Payout & Document;
 
 @Schema({ timestamps: true })
 export class Payout {
-  @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Vendor', required: true, index: true })
   vendorId: Types.ObjectId;
 
   @Prop({ type: Number, required: true })
   amount: number;
 
-  @Prop({ type: [Types.ObjectId], ref: 'Payment', required: true })
+  @Prop({ type: [SchemaTypes.ObjectId], ref: 'Payment', required: true })
   paymentIds: Types.ObjectId[];
 
   @Prop({

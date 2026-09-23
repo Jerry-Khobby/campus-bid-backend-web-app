@@ -1,17 +1,17 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 
 export type PaymentDocument = Payment & Document;
 
 @Schema({ timestamps: true, versionKey: false })
 export class Payment {
-  @Prop({ type: Types.ObjectId, ref: 'Order', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Order', required: true, index: true })
   orderId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'User', required: true, index: true })
   customerId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Vendor', required: true, index: true })
   vendorId: Types.ObjectId;
 
   @Prop({ type: Number, required: true, min: 0 })
@@ -34,7 +34,7 @@ export class Payment {
   @Prop({ type: String, unique: true })
   transactionId: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Payout', index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Payout', index: true })
   payoutId?: Types.ObjectId;
 
   @Prop({ type: Number, default: 0 })

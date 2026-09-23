@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 
 export type ConversationDocument = Conversation & Document;
 
@@ -10,8 +10,8 @@ export class Conversation {
   // -----------------------------
   @Prop({
     type: {
-      customerId: { type: Types.ObjectId, ref: 'User', required: true },
-      vendorId: { type: Types.ObjectId, ref: 'Vendor', required: true },
+      customerId: { type: SchemaTypes.ObjectId, ref: 'User', required: true },
+      vendorId: { type: SchemaTypes.ObjectId, ref: 'Vendor', required: true },
     },
     required: true,
   })
@@ -23,7 +23,7 @@ export class Conversation {
   // -----------------------------
   // LINK TO ORDER (optional)
   // -----------------------------
-  @Prop({ type: Types.ObjectId, ref: 'Order', required: false })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Order', required: false })
   orderId?: Types.ObjectId;
 
   // -----------------------------
@@ -32,7 +32,7 @@ export class Conversation {
   @Prop({
     type: {
       text: { type: String },
-      senderId: { type: Types.ObjectId, ref: 'User' },
+      senderId: { type: SchemaTypes.ObjectId, ref: 'User' },
       timestamp: { type: Date },
     },
     default: null,

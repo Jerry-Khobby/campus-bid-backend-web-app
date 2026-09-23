@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 
 export enum FlashSaleStatus {
   UPCOMING = 'upcoming',
@@ -15,10 +15,10 @@ export enum FlashSaleReason {
 
 @Schema({ timestamps: true })
 export class FlashSale {
-  @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Vendor', required: true })
   vendorId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Product', required: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Product', required: true })
   productId: Types.ObjectId;
 
   @Prop({ required: true })
@@ -30,7 +30,7 @@ export class FlashSale {
   @Prop()
   currentBid?: number;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'User' })
   currentBidder?: Types.ObjectId;
 
   @Prop({ default: 1 })
@@ -54,7 +54,7 @@ export class FlashSale {
 
   @Prop([
     {
-      userId: { type: Types.ObjectId, ref: 'User' },
+      userId: { type: SchemaTypes.ObjectId, ref: 'User' },
       amount: Number,
       timestamp: Date,
     },
@@ -65,7 +65,7 @@ export class FlashSale {
     timestamp: Date;
   }>;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'User' })
   winner?: Types.ObjectId;
 
   @Prop({

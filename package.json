@@ -19,7 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "backfill-vendor-isactive": "ts-node -r tsconfig-paths/register src/scripts/backfill-vendor-isactive.ts",
-    "create-admin": "ts-node -r tsconfig-paths/register src/scripts/create-admin.ts"
+    "create-admin": "ts-node -r tsconfig-paths/register src/scripts/create-admin.ts",
+    "migrate-objectid-refs": "ts-node -r tsconfig-paths/register src/scripts/migrate-objectid-refs.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

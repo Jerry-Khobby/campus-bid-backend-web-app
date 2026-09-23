@@ -1,10 +1,10 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
-import { Document, Types } from "mongoose";
+import { Document, SchemaTypes, Types } from "mongoose";
 
 @Schema({ timestamps: true })
 export class Product extends Document {
   // ✅ Reference to Vendor
-  @Prop({ type: Types.ObjectId, ref: "Vendor", required: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: "Vendor", required: true })
   vendorId: Types.ObjectId;
 
   // ✅ Basic Info
@@ -72,7 +72,7 @@ export class Product extends Document {
   @Prop({ default: false })
   isFlashSale: boolean;
 
-  @Prop({ type: Types.ObjectId, ref: "FlashSale", default: null })
+  @Prop({ type: SchemaTypes.ObjectId, ref: "FlashSale", default: null })
   flashSaleId?: Types.ObjectId | null;
 
   // ✅ Stats

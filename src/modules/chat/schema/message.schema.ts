@@ -1,16 +1,16 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, SchemaTypes, Types } from 'mongoose';
 
 export type MessageDocument = Message & Document;
 
 @Schema({ timestamps: { createdAt: true, updatedAt: false }, versionKey: false })
 export class Message {
   // Conversation this message belongs to
-  @Prop({ type: Types.ObjectId, ref: 'Conversation', required: true, index: true })
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'Conversation', required: true, index: true })
   conversationId: Types.ObjectId;
 
   // Sender (can be vendor or customer)
-  @Prop({ type: Types.ObjectId, required: true })
+  @Prop({ type: SchemaTypes.ObjectId, required: true })
   senderId: Types.ObjectId;
 
   // Identify sender type for UI
