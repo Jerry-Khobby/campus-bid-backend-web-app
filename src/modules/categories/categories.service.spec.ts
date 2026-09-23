@@ -64,8 +64,8 @@ describe("CategoriesService", () => {
     });
 
     it("updates and saves an existing category", async () => {
-      const save = jest.fn().mockResolvedValue({ name: "Books" });
-      categoryModel.findById.mockResolvedValue({ name: "Food", save });
+      const save = jest.fn().mockResolvedValue({ _id: mockCategoryId, name: "Books" });
+      categoryModel.findById.mockResolvedValue({ _id: mockCategoryId, name: "Food", save });
 
       await service.update(mockCategoryId, { name: "Books" } as any);
 

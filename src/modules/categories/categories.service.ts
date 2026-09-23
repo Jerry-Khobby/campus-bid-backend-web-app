@@ -20,6 +20,11 @@ export interface ActiveCategorySummary {
   productCount: number;
 }
 
+export interface AdminCategorySummary extends ActiveCategorySummary {
+  isActive: boolean;
+  sortOrder: number;
+}
+
 @Injectable()
 export class CategoriesService {
   private readonly logger = new Logger(CategoriesService.name);
@@ -29,21 +34,24 @@ export class CategoriesService {
     @InjectModel("Product") private readonly productModel: Model<any>
   ) {}
 
-  async create(dto: CreateCategoryDto): Promise<CategoryDocument> {
+  async create(dto: CreateCategoryDto): Promise<AdminCategorySummary> {
     const existing = await this.categoryModel.findOne({
       name: new RegExp(`^${escapeRegex(dto.name)}$`, "i"),
     });
     if (existing) throw new ConflictException("Category name already exists");
 
+    let saved: CategoryDocument;
     try {
-      return await new this.categoryModel(dto).save();
+      saved = await new this.categoryModel(dto).save();
     } catch (err) {
       this.logger.error("Error saving category", err);
       throw new InternalServerErrorException("Failed to create category");
     }
+
+    return this.toAdminSummary(saved);
   }
 
-  async update(id: string, dto: UpdateCategoryDto): Promise<CategoryDocument> {
+  async update(id: string, dto: UpdateCategoryDto): Promise<AdminCategorySummary> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException("Invalid category id");
 
     const category = await this.categoryModel.findById(id);
@@ -51,12 +59,15 @@ export class CategoriesService {
 
     Object.assign(category, dto);
 
+    let saved: CategoryDocument;
     try {
-      return await category.save();
+      saved = await category.save();
     } catch (err) {
       this.logger.error("Error updating category", err);
       throw new InternalServerErrorException("Failed to update category");
     }
+
+    return this.toAdminSummary(saved);
   }
 
   async remove(id: string): Promise<void> {
@@ -75,6 +86,12 @@ export class CategoriesService {
     return Promise.all(categories.map((category) => this.toActiveSummary(category)));
   }
 
+  async listAll(): Promise<AdminCategorySummary[]> {
+    const categories = await this.categoryModel.find().sort({ sortOrder: 1 });
+
+    return Promise.all(categories.map((category) => this.toAdminSummary(category)));
+  }
+
   async assertActiveCategory(name: string): Promise<void> {
     const category = await this.categoryModel.findOne({ name, isActive: true });
     if (!category) throw new BadRequestException("Invalid or inactive category: " + name);
@@ -88,6 +105,14 @@ export class CategoriesService {
       name: category.name,
       icon: category.icon,
       productCount,
+    };
+  }
+
+  private async toAdminSummary(category: CategoryDocument): Promise<AdminCategorySummary> {
+    return {
+      ...(await this.toActiveSummary(category)),
+      isActive: category.isActive,
+      sortOrder: category.sortOrder,
     };
   }
 }

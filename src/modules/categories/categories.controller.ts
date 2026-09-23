@@ -24,6 +24,17 @@ export class CategoriesController {
 
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("admin")
+  @Get("admin")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "List all categories including inactive ones (Admin only)" })
+  @ApiResponse({ status: 200, description: "Categories fetched successfully" })
+  async listAll() {
+    const categories = await this.categoriesService.listAll();
+    return { success: true, message: "Categories fetched successfully", data: categories };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
   @Post()
   @ApiBearerAuth()
   @ApiOperation({ summary: "Create a new category (Admin only)" })
