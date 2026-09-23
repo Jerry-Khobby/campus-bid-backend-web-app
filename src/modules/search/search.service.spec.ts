@@ -10,6 +10,7 @@ describe("SearchService", () => {
   let vendorModel: any;
 
   const buildQueryChain = (result: any[]) => ({
+    select: jest.fn().mockReturnThis(),
     sort: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     lean: jest.fn().mockResolvedValue(result),

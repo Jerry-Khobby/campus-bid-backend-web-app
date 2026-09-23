@@ -53,7 +53,8 @@ export class SearchService {
 
   private searchVendors(text: string): Promise<any[]> {
     return this.vendorModel
-      .find({ $text: { $search: text } }, { score: { $meta: "textScore" } })
+      .find({ $text: { $search: text }, isActive: true }, { score: { $meta: "textScore" } })
+      .select("-password -refreshToken -oauth -bankDetails")
       .sort({ score: { $meta: "textScore" } })
       .limit(SEARCH_RESULT_LIMIT)
       .lean();
