@@ -45,6 +45,11 @@ export class NotificationsService {
       const exists = await this.vendorModel.exists({ _id: dto.userId });
       if (!exists) throw new NotFoundException('Vendor not found');
     }
+
+    if (dto.userType === 'admin') {
+      const exists = await this.userModel.exists({ _id: dto.userId, role: 'admin' });
+      if (!exists) throw new NotFoundException('Admin not found');
+    }
   }
 
   /**
@@ -98,7 +103,7 @@ export class NotificationsService {
    */
   async notify(
     userId: string,
-    userType: 'customer' | 'vendor',
+    userType: 'customer' | 'vendor' | 'admin',
     type: string,
     title: string,
     message: string,
@@ -115,6 +120,22 @@ export class NotificationsService {
 
     this.gateway.sendToUser(userId, notification);
     return notification;
+  }
+
+  /**
+   * Notify every admin account - used for events with no single owning user
+   * (e.g. a dispute) where the whole admin team needs visibility.
+   */
+  async notifyAllAdmins(
+    type: string,
+    title: string,
+    message: string,
+    data?: Record<string, any>,
+  ) {
+    const admins = await this.userModel.find({ role: 'admin' }, '_id').lean();
+    await Promise.all(
+      admins.map((admin) => this.notify(String(admin._id), 'admin', type, title, message, data)),
+    );
   }
 
   /**

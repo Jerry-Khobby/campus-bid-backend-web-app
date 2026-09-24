@@ -4,8 +4,8 @@ export class CreateNotificationDto {
   @IsNotEmpty()
   userId: string;
 
-  @IsEnum(['customer', 'vendor'])
-  userType: 'customer' | 'vendor';
+  @IsEnum(['customer', 'vendor', 'admin'])
+  userType: 'customer' | 'vendor' | 'admin';
 
   @IsEnum([
     'order_update',
@@ -15,6 +15,7 @@ export class CreateNotificationDto {
     'order_status_changed',
     'flash_sale_alert',
     'flash_sale_won',
+    'payment_disputed',
   ])
   type:
     | 'order_update'
@@ -23,7 +24,8 @@ export class CreateNotificationDto {
     | 'payment'
     | 'order_status_changed'
     | 'flash_sale_alert'
-    | 'flash_sale_won';
+    | 'flash_sale_won'
+    | 'payment_disputed';
 
   @IsString()
   @IsNotEmpty()

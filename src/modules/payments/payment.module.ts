@@ -10,6 +10,7 @@ import { Payment, PaymentSchema } from './schema/payment.schema';
 import { Payout, PayoutSchema } from './schema/payout.schema';
 import { Order, OrderSchema } from '../orders/schema/order.schema';
 import { Vendor, VendorSchema } from '../vendors/schema/vendor.schema';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { Vendor, VendorSchema } from '../vendors/schema/vendor.schema';
       { name: Order.name, schema: OrderSchema },
       { name: Vendor.name, schema: VendorSchema },
     ]),
+    NotificationsModule,
   ],
   controllers: [PaymentsController, PaymentWebhookController],
   providers: [PaymentsService, PaystackService, PayoutsService],

@@ -18,6 +18,7 @@ import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { PaymentQueryDto } from './dto/payment-query.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const ADMIN_COMMISSION_RATE = 0.1;
 const PESEWAS_PER_CEDI = 100;
@@ -42,6 +43,7 @@ export class PaymentsService {
     private readonly orderModel: Model<OrderDocument>,
     private readonly paystackService: PaystackService,
     private readonly configService: ConfigService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // -----------------------------
@@ -314,6 +316,18 @@ export class PaymentsService {
     await payment.save();
 
     this.logger.warn(`Payment ${payment._id} refunded for reason: ${dto.reason}`);
+
+    try {
+      await this.notificationsService.notifyAllAdmins(
+        'payment_disputed',
+        'Payment disputed',
+        `A payment was refunded following a customer dispute: ${dto.reason}`,
+        { paymentId: (payment._id as Types.ObjectId).toString() },
+      );
+    } catch (error) {
+      this.logger.warn(`Failed to notify admins of dispute for payment ${payment._id}`, error);
+    }
+
     return payment;
   }
 

@@ -12,6 +12,7 @@ import { PaymentsService } from './payment.service';
 import { PaystackService } from './paystack.service';
 import { Payment } from './schema/payment.schema';
 import { Order } from '../orders/schema/order.schema';
+import { NotificationsService } from '../notifications/notifications.service';
 
 // The real order.schema.ts pulls in the `uuid` package (ESM-only), which the
 // project's CommonJS Jest transform cannot parse. Stub it so this unit test
@@ -72,6 +73,7 @@ describe('PaymentsService', () => {
           },
         },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
+        { provide: NotificationsService, useValue: { notifyAllAdmins: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

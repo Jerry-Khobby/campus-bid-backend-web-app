@@ -8,8 +8,8 @@ export class Notification {
   @Prop({ type: SchemaTypes.ObjectId, required: true })
   userId: Types.ObjectId;
 
-  @Prop({ type: String, enum: ['customer', 'vendor'], required: true })
-  userType: 'customer' | 'vendor';
+  @Prop({ type: String, enum: ['customer', 'vendor', 'admin'], required: true })
+  userType: 'customer' | 'vendor' | 'admin';
 
   @Prop({
     type: String,
@@ -21,6 +21,7 @@ export class Notification {
       'order_status_changed',
       'flash_sale_alert',
       'flash_sale_won',
+      'payment_disputed',
     ],
     required: true,
   })
@@ -31,7 +32,8 @@ export class Notification {
     | 'payment'
     | 'order_status_changed'
     | 'flash_sale_alert'
-    | 'flash_sale_won';
+    | 'flash_sale_won'
+    | 'payment_disputed';
 
   @Prop({ type: String, required: true })
   title: string;
