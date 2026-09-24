@@ -21,7 +21,7 @@ export class AdminService {
   ) {}
 
   async getDashboard() {
-    const [totals, orderStatusBreakdown, recentOrders, revenueTrend, topVendors, revenueByCategory, customerGrowth] =
+    const [totals, orderStatusBreakdown, recentOrders, revenueTrend, topVendors, revenueByCategory, customerGrowth, kpiDeltas] =
       await Promise.all([
         this.getPlatformTotals(),
         this.getOrderStatusBreakdown(),
@@ -30,6 +30,7 @@ export class AdminService {
         this.getTopVendors(TOP_VENDORS_LIMIT),
         this.getRevenueByCategory(),
         this.getCustomerGrowth(CUSTOMER_GROWTH_MONTHS),
+        this.getKpiDeltas(DASHBOARD_TREND_DAYS),
       ]);
 
     return {
@@ -40,6 +41,7 @@ export class AdminService {
       topVendors,
       revenueByCategory,
       customerGrowth,
+      kpiDeltas,
     };
   }
 
@@ -105,6 +107,41 @@ export class AdminService {
       status: order.status,
       createdAt: (order as any).createdAt,
     }));
+  }
+
+  /** Percentage change of each headline "flow" KPI vs the equal-length period immediately
+   * before it (e.g. this week vs last week). "Stock" KPIs (active vendors, pending orders)
+   * are a snapshot, not a flow, so they intentionally have no delta here. */
+  private async getKpiDeltas(days: number) {
+    const currentStart = this.daysAgo(days);
+    const previousStart = this.daysAgo(days * 2);
+
+    const [currentOrders, previousOrders, newCustomersCurrent, newCustomersPrevious] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: { createdAt: { $gte: currentStart }, status: "completed" } },
+        { $group: { _id: null, revenue: { $sum: "$pricing.total" }, orders: { $sum: 1 } } },
+      ]),
+      this.orderModel.aggregate([
+        { $match: { createdAt: { $gte: previousStart, $lt: currentStart }, status: "completed" } },
+        { $group: { _id: null, revenue: { $sum: "$pricing.total" }, orders: { $sum: 1 } } },
+      ]),
+      this.userModel.countDocuments({ role: "student", createdAt: { $gte: currentStart } }),
+      this.userModel.countDocuments({ role: "student", createdAt: { $gte: previousStart, $lt: currentStart } }),
+    ]);
+
+    return {
+      revenueChangePct: this.percentChange(currentOrders[0]?.revenue ?? 0, previousOrders[0]?.revenue ?? 0),
+      ordersChangePct: this.percentChange(currentOrders[0]?.orders ?? 0, previousOrders[0]?.orders ?? 0),
+      newCustomersChangePct: this.percentChange(newCustomersCurrent, newCustomersPrevious),
+    };
+  }
+
+  /** Null means "no prior-period baseline to compare against" rather than a
+   * misleading fixed percentage - the frontend renders that as "new" (when the
+   * current value is nonzero) or "no data" (when it's zero too). */
+  private percentChange(current: number, previous: number): number | null {
+    if (previous === 0) return null;
+    return Math.round(((current - previous) / previous) * 1000) / 10;
   }
 
   private getDailyRevenue(since: Date) {
