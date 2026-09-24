@@ -1,15 +1,13 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-// NOTE: Payment/Order documents store vendorId/customerId as plain strings,
-// not cast ObjectIds — createOrder/createPendingPayment never explicitly
-// cast them and the schema's declared ObjectId type isn't enforced on
-// existing data. Aggregation $match stages don't apply schema casting at
-// all, so wrapping vendorId in `new Types.ObjectId(...)` here compares an
-// ObjectId against stored strings and silently matches nothing. Querying
-// with the plain string (as the rest of the codebase already does
-// successfully, e.g. orders.service.ts's getOrders) is what actually works
-// against the real data.
+// NOTE: Payment.vendorId/customerId are real ObjectIds in the schema (see
+// payment.schema.ts). A plain .find()/.findById()/.countDocuments() call
+// auto-casts a string vendorId against that schema, so passing it as-is
+// there is correct and required. Aggregation $match stages are raw MongoDB
+// pipelines and do NOT apply that casting — any vendorId used inside an
+// aggregate() must be wrapped in `new Types.ObjectId(vendorId)` first, or it
+// silently matches nothing.
 import { Payment, PaymentDocument } from './schema/payment.schema';
 import { Payout, PayoutDocument } from './schema/payout.schema';
 import { Vendor, VendorDocument } from '../vendors/schema/vendor.schema';
@@ -36,9 +34,10 @@ export class PayoutsService {
   // VENDOR BALANCES (public contract — consumed by the vendor dashboard module)
   // -----------------------------
   async getVendorBalances(vendorId: string): Promise<VendorBalances> {
+    const vendorObjectId = new Types.ObjectId(vendorId);
     const [pendingBalance, availableBalance] = await Promise.all([
-      this.sumPaymentsAmount({ vendorId, status: 'held' }, '$amount'),
-      this.sumPaymentsAmount({ vendorId, status: 'released', payoutId: null }, '$vendorPayout'),
+      this.sumPaymentsAmount({ vendorId: vendorObjectId, status: 'held' }, '$amount'),
+      this.sumPaymentsAmount({ vendorId: vendorObjectId, status: 'released', payoutId: null }, '$vendorPayout'),
     ]);
 
     return { pendingBalance, availableBalance };

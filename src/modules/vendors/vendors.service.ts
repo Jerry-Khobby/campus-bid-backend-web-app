@@ -591,12 +591,12 @@ async handleGoogleLogin(googleUser: {
 
   // =========================================================
   // DASHBOARD
-  // NOTE: Order/Payment/FlashSale documents store vendorId as a plain string
-  // (never explicitly cast on creation), while Product documents store it as
-  // a real ObjectId. Aggregation $match stages never cast, and plain .find()
-  // filters here don't either — so Order/Payment/FlashSale queries must pass
-  // vendorId as-is, while Product queries must wrap it in `new
-  // Types.ObjectId(vendorId)`. Mixing these up silently returns zero results.
+  // NOTE: Order/Payment/FlashSale/Product all declare vendorId as a real
+  // ObjectId in their schema. A plain .find()/.countDocuments() call
+  // auto-casts a string vendorId against that, so passing it as-is there is
+  // correct. Aggregation $match stages are raw pipelines and do NOT apply
+  // that casting — any vendorId used inside an aggregate() must be wrapped
+  // in `new Types.ObjectId(vendorId)` first, or it silently matches nothing.
   // =========================================================
 
   async getDashboard(vendorId: string) {
@@ -641,7 +641,7 @@ async handleGoogleLogin(googleUser: {
 
   private async aggregateOrders(vendorId: string, since: Date) {
     const [result] = await this.orderModel.aggregate([
-      { $match: { vendorId, createdAt: { $gte: since } } },
+      { $match: { vendorId: new Types.ObjectId(vendorId), createdAt: { $gte: since } } },
       { $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: "$pricing.total" } } },
     ]);
     return { orders: result?.orders ?? 0, revenue: result?.revenue ?? 0 };
@@ -699,7 +699,7 @@ async handleGoogleLogin(googleUser: {
   }
 
   private buildDateMatch(vendorId: string, start: Date, end: Date) {
-    return { vendorId, createdAt: { $gte: start, $lte: end } };
+    return { vendorId: new Types.ObjectId(vendorId), createdAt: { $gte: start, $lte: end } };
   }
 
   private async getOrderSummary(vendorId: string, start: Date, end: Date) {
