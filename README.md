@@ -50,6 +50,14 @@ This `README` is the front door. Everything else lives in [`docs/`](./docs), one
 | [chat.md](./docs/chat.md) | Buyer↔vendor messaging, REST + WebSocket |
 | [notifications.md](./docs/notifications.md) | Cross-cutting notification delivery, REST + WebSocket |
 
+## Deploying for free
+
+- **Compute**: [Render](https://render.com)'s free Web Service tier. Build command `npm install && npm run build`, start command `npm run start:prod`. Render injects its own `PORT` — don't set one; `src/main.ts` already reads `process.env.PORT`. The free tier spins the service down after ~15 min idle (next request takes ~30–50s to wake it).
+- **MongoDB**: keep Atlas's free M0 tier — no code change needed, just make sure Atlas's Network Access allows `0.0.0.0/0` (Render's free tier has no static outbound IP to allowlist instead).
+- **Redis**: swap to a hosted free tier (e.g. [Upstash](https://upstash.com)) and set its connection string as `REDIS_URL` — `redis-config.ts` prefers `REDIS_URL` over `REDIS_HOST`/`REDIS_PORT` specifically so hosted providers' password+TLS URLs work without a code change.
+- Set `CORS_ORIGINS`, `APP_URL`, `VENDOR_APP_URL`, `GOOGLE_CALLBACK_URL`, and `GOOGLE_CALLBACK_URL_VENDOR` to the deployed frontend/backend URLs once you know them — every one of these defaults to a `localhost` value that only works in local dev. See [docs/environment-variables.md](./docs/environment-variables.md) for exactly what each controls.
+- Local `.env` never leaves your machine — a hosting provider's environment variables are configured separately, in its own dashboard.
+
 ### A note on API schemas
 
 This documentation deliberately does not restate every request/response field for every endpoint — Swagger (`/api-docs`), generated straight from the DTOs, is the source of truth for exact shapes and literally cannot drift out of sync with the code the way a hand-written spec can. The `docs/` files focus on what Swagger can't show: request/response shape conventions per module, cross-module side effects, state machines, WebSocket events, and the "why" behind non-obvious decisions.
