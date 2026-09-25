@@ -46,6 +46,7 @@ describe('PaymentsService', () => {
   let paymentModel: any;
   let orderModel: any;
   let paystackService: jest.Mocked<PaystackService>;
+  let notificationsService: { notifyAllAdmins: jest.Mock };
 
   beforeEach(async () => {
     paymentModel = jest.fn().mockImplementation((data: any) => ({
@@ -79,6 +80,7 @@ describe('PaymentsService', () => {
 
     service = module.get<PaymentsService>(PaymentsService);
     paystackService = module.get(PaystackService);
+    notificationsService = module.get(NotificationsService);
   });
 
   describe('initializePayment', () => {
@@ -204,7 +206,7 @@ describe('PaymentsService', () => {
       expect(payment.save).toHaveBeenCalled();
     });
 
-    it('does not release funds when the verified amount does not match', async () => {
+    it('marks the payment failed and notifies admins when the verified amount does not match', async () => {
       paystackService.verifyWebhookSignature.mockReturnValue(true);
       const payment = createPaymentDoc({ status: 'pending', amount: 150 });
       paymentModel.findOne.mockResolvedValue(payment);
@@ -215,8 +217,28 @@ describe('PaymentsService', () => {
         data: { reference: 'ref123' },
       });
 
-      expect(payment.status).toBe('pending');
-      expect(payment.save).not.toHaveBeenCalled();
+      expect(payment.status).toBe('failed');
+      expect(payment.save).toHaveBeenCalled();
+      expect(notificationsService.notifyAllAdmins).toHaveBeenCalledWith(
+        'payment',
+        expect.any(String),
+        expect.stringContaining(String(PAYMENT_ID)),
+        expect.objectContaining({ paymentId: PAYMENT_ID, verifiedStatus: 'success', verifiedAmount: 5000 }),
+      );
+    });
+
+    it('does not release funds when the verified status is not success', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      const payment = createPaymentDoc({ status: 'pending', amount: 150 });
+      paymentModel.findOne.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'abandoned', amount: 15000 } as any);
+
+      await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.success',
+        data: { reference: 'ref123' },
+      });
+
+      expect(payment.status).toBe('failed');
     });
 
     it('marks a pending payment as failed on charge.failed', async () => {
@@ -366,6 +388,22 @@ describe('PaymentsService', () => {
 
       expect(result.status).toBe('refunded');
       expect(result.metadata?.refundReason).toBe('item never arrived');
+      expect(notificationsService.notifyAllAdmins).toHaveBeenCalledWith(
+        'payment_disputed',
+        expect.any(String),
+        expect.stringContaining('item never arrived'),
+        expect.objectContaining({ paymentId: PAYMENT_ID }),
+      );
+    });
+
+    it('still refunds the payment when notifying admins fails', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+      notificationsService.notifyAllAdmins.mockRejectedValueOnce(new Error('notification service down'));
+
+      const result = await service.refundPayment(PAYMENT_ID, dto, CUSTOMER_ID);
+
+      expect(result.status).toBe('refunded');
     });
 
     it('refunds a held payment when the actor is the order vendor', async () => {

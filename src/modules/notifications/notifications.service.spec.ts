@@ -77,6 +77,61 @@ describe('NotificationsService', () => {
         service.create({ userId, userType: 'customer', type: 'order_update', title: 't', message: 'm' } as any),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('creates a notification for an existing admin', async () => {
+      userModel.exists.mockResolvedValue(true);
+      cacheManager.get.mockResolvedValue(0);
+      notificationModel.create.mockResolvedValue({ _id: '1', userId });
+
+      await service.create({
+        userId,
+        userType: 'admin',
+        type: 'payment_disputed',
+        title: 'Title',
+        message: 'Message',
+      } as any);
+
+      expect(userModel.exists).toHaveBeenCalledWith({ _id: userId, role: 'admin' });
+    });
+
+    it('throws NotFoundException when the admin does not exist', async () => {
+      userModel.exists.mockResolvedValue(false);
+
+      await expect(
+        service.create({ userId, userType: 'admin', type: 'payment_disputed', title: 't', message: 'm' } as any),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('notifyAllAdmins', () => {
+    it('notifies every admin user and no one else', async () => {
+      const adminIds = [new Types.ObjectId(), new Types.ObjectId()];
+      userModel.find = jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue(adminIds.map((id) => ({ _id: id }))),
+      });
+      userModel.exists.mockResolvedValue(true);
+      cacheManager.get.mockResolvedValue(0);
+      notificationModel.create.mockImplementation((data: any) => Promise.resolve({ _id: 'n', ...data }));
+
+      await service.notifyAllAdmins('payment_disputed', 'Title', 'Message', { paymentId: 'p1' });
+
+      expect(userModel.find).toHaveBeenCalledWith({ role: 'admin' }, '_id');
+      expect(gateway.sendToUser).toHaveBeenCalledTimes(2);
+      adminIds.forEach((id) => {
+        expect(gateway.sendToUser).toHaveBeenCalledWith(
+          id.toString(),
+          expect.objectContaining({ userType: 'admin', type: 'payment_disputed' }),
+        );
+      });
+    });
+
+    it('does nothing when there are no admins', async () => {
+      userModel.find = jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+
+      await service.notifyAllAdmins('payment_disputed', 'Title', 'Message');
+
+      expect(gateway.sendToUser).not.toHaveBeenCalled();
+    });
   });
 
   describe('notify', () => {

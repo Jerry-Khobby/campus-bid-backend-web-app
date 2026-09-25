@@ -163,7 +163,9 @@ export class PaymentsService {
     const verified = await this.paystackService.verifyTransaction(reference);
 
     if (!this.isVerifiedChargeValid(verified, payment.amount)) {
-      this.logger.warn(`Webhook amount/status mismatch for payment ${payment._id}`);
+      this.logger.error(`Webhook amount/status mismatch for payment ${payment._id} - marking failed`);
+      await this.markPaymentFailed(payment, verified);
+      await this.notifyAdminsOfChargeMismatch(payment, verified);
       return;
     }
 
@@ -171,6 +173,26 @@ export class PaymentsService {
     payment.holdStartTime = new Date();
     payment.gatewayResponse = verified;
     await payment.save();
+  }
+
+  private async notifyAdminsOfChargeMismatch(
+    payment: PaymentDocument,
+    verified: { status: string; amount: number },
+  ): Promise<void> {
+    try {
+      await this.notificationsService.notifyAllAdmins(
+        'payment',
+        'Payment verification mismatch',
+        `Paystack verification for payment ${payment._id} did not match the expected amount/status and was marked failed.`,
+        {
+          paymentId: (payment._id as Types.ObjectId).toString(),
+          verifiedStatus: verified.status,
+          verifiedAmount: verified.amount,
+        },
+      );
+    } catch (error) {
+      this.logger.warn(`Failed to notify admins of charge mismatch for payment ${payment._id}`, error);
+    }
   }
 
   private isVerifiedChargeValid(
