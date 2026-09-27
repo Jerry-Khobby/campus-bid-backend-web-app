@@ -14,6 +14,7 @@ import { Payment, PaymentDocument } from './schema/payment.schema';
 import { Order, OrderDocument } from '../orders/schema/order.schema';
 import { PaystackService } from './paystack.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
+import { PaymentMethod } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
@@ -25,12 +26,23 @@ const PESEWAS_PER_CEDI = 100;
 const DEFAULT_PAYSTACK_CALLBACK_URL = 'http://localhost:3000/api/payments/callback';
 const HANDLED_WEBHOOK_EVENTS = ['charge.success', 'charge.failed'];
 
-export interface InitializePaymentResult {
+export interface CardPaymentResult {
   paymentId: Types.ObjectId;
+  paymentMethod: 'card';
   authorizationUrl: string;
   accessCode: string;
   reference: string;
 }
+
+export interface MobileMoneyPaymentResult {
+  paymentId: Types.ObjectId;
+  paymentMethod: 'mobile_money';
+  reference: string;
+  status: string;
+  displayText?: string;
+}
+
+export type InitializePaymentResult = CardPaymentResult | MobileMoneyPaymentResult;
 
 @Injectable()
 export class PaymentsService {
@@ -62,10 +74,15 @@ export class PaymentsService {
 
     // Created before calling Paystack so its _id can be embedded in the
     // callback URL below — the frontend needs paymentId to know which
-    // payment to poll once Paystack redirects the browser back.
-    const payment = await this.createPendingPayment(order, dto.paymentMethod, reference);
-    const callbackUrl = this.getPaystackCallbackUrl(payment._id as Types.ObjectId);
+    // payment to poll once Paystack redirects the browser back (card) or
+    // once the mobile money charge resolves (no redirect for that one).
+    const payment = await this.createPendingPayment(order, dto, reference);
 
+    if (dto.paymentMethod === PaymentMethod.MOBILE_MONEY) {
+      return this.initializeMobileMoneyPayment(payment, customerEmail, amountInSmallestUnit, reference, dto);
+    }
+
+    const callbackUrl = this.getPaystackCallbackUrl(payment._id as Types.ObjectId);
     const transaction = await this.paystackService.initializeTransaction(
       customerEmail,
       amountInSmallestUnit,
@@ -75,10 +92,64 @@ export class PaymentsService {
 
     return {
       paymentId: payment._id as Types.ObjectId,
+      paymentMethod: 'card',
       authorizationUrl: transaction.authorization_url,
       accessCode: transaction.access_code,
       reference,
     };
+  }
+
+  private async initializeMobileMoneyPayment(
+    payment: PaymentDocument,
+    email: string,
+    amountInSmallestUnit: number,
+    reference: string,
+    dto: InitializePaymentDto,
+  ): Promise<MobileMoneyPaymentResult> {
+    const charge = await this.paystackService.chargeMobileMoney(
+      email,
+      amountInSmallestUnit,
+      reference,
+      dto.phone!,
+      dto.momoProvider!,
+    );
+
+    if (charge.status === 'failed') {
+      payment.status = 'failed';
+      payment.gatewayResponse = charge;
+      await payment.save();
+    }
+
+    return {
+      paymentId: payment._id as Types.ObjectId,
+      paymentMethod: 'mobile_money',
+      reference,
+      status: charge.status,
+      displayText: charge.display_text,
+    };
+  }
+
+  // -----------------------------
+  // SUBMIT MOBILE MONEY OTP (student)
+  // -----------------------------
+  async submitMomoOtp(paymentId: string, otp: string, actorId: string): Promise<{ status: string }> {
+    const payment = await this.findById(paymentId);
+
+    if (payment.customerId.toString() !== actorId)
+      throw new ForbiddenException('You cannot act on this payment');
+
+    if (payment.paymentMethod !== 'mobile_money' || payment.status !== 'pending')
+      throw new ConflictException('This payment is not awaiting an OTP');
+
+    const result = await this.paystackService.submitOtp(payment.transactionId, otp);
+
+    if (result.status === 'failed') {
+      payment.status = 'failed';
+      payment.gatewayResponse = result;
+      await payment.save();
+    }
+
+    return { status: result.status };
   }
 
   private async findOrderForCustomer(orderId: string, customerId: string): Promise<OrderDocument> {
@@ -116,7 +187,7 @@ export class PaymentsService {
 
   private async createPendingPayment(
     order: OrderDocument,
-    paymentMethod: string,
+    dto: InitializePaymentDto,
     reference: string,
   ): Promise<PaymentDocument> {
     const payment = new this.paymentModel({
@@ -124,10 +195,14 @@ export class PaymentsService {
       customerId: order.customerId,
       vendorId: order.vendorId,
       amount: order.pricing.total,
-      paymentMethod,
+      paymentMethod: dto.paymentMethod,
       status: 'pending',
       transactionId: reference,
       gatewayReference: reference,
+      metadata:
+        dto.paymentMethod === PaymentMethod.MOBILE_MONEY
+          ? { momoProvider: dto.momoProvider, phone: dto.phone }
+          : undefined,
     });
 
     return payment.save();

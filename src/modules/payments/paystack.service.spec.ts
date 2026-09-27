@@ -42,7 +42,7 @@ describe('PaystackService', () => {
       expect(result).toEqual(gatewayData);
       expect(mockedAxios.post).toHaveBeenCalledWith(
         'https://api.paystack.co/transaction/initialize',
-        { email: 'a@b.com', amount: 10000, reference: 'ref123', callback_url: 'https://cb.url' },
+        { email: 'a@b.com', amount: 10000, currency: 'GHS', reference: 'ref123', callback_url: 'https://cb.url' },
         { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
       );
     });
@@ -74,6 +74,57 @@ describe('PaystackService', () => {
       mockedAxios.get.mockRejectedValue(new Error('network down'));
 
       await expect(service.verifyTransaction('ref123')).rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
+  describe('chargeMobileMoney', () => {
+    it('sends the charge request and returns the gateway status', async () => {
+      const gatewayData = { status: 'pay_offline', display_text: 'Approve on your phone', reference: 'ref123' };
+      mockedAxios.post.mockResolvedValue({ data: { data: gatewayData } });
+
+      const result = await service.chargeMobileMoney('a@b.com', 10000, 'ref123', '0551234567', 'mtn');
+
+      expect(result).toEqual(gatewayData);
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'https://api.paystack.co/charge',
+        {
+          email: 'a@b.com',
+          amount: 10000,
+          currency: 'GHS',
+          reference: 'ref123',
+          mobile_money: { phone: '0551234567', provider: 'mtn' },
+        },
+        { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
+      );
+    });
+
+    it('throws InternalServerErrorException when the gateway call fails', async () => {
+      mockedAxios.post.mockRejectedValue(new Error('network down'));
+
+      await expect(
+        service.chargeMobileMoney('a@b.com', 10000, 'ref123', '0551234567', 'mtn'),
+      ).rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
+  describe('submitOtp', () => {
+    it('submits the OTP and returns the resulting status', async () => {
+      mockedAxios.post.mockResolvedValue({ data: { data: { status: 'success' } } });
+
+      const result = await service.submitOtp('ref123', '123456');
+
+      expect(result).toEqual({ status: 'success' });
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'https://api.paystack.co/charge/submit_otp',
+        { reference: 'ref123', otp: '123456' },
+        { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
+      );
+    });
+
+    it('throws InternalServerErrorException when the gateway call fails', async () => {
+      mockedAxios.post.mockRejectedValue(new Error('network down'));
+
+      await expect(service.submitOtp('ref123', '123456')).rejects.toThrow(InternalServerErrorException);
     });
   });
 

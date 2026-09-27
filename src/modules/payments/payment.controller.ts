@@ -13,6 +13,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PaymentsService } from './payment.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
+import { SubmitMomoOtpDto } from './dto/submit-momo-otp.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
@@ -36,6 +37,16 @@ export class PaymentsController {
   @ApiOperation({ summary: 'Initialize a Paystack payment for an order (student)' })
   async initialize(@Req() req, @Body() dto: InitializePaymentDto) {
     return this.paymentsService.initializePayment(req.user.sub, dto, req.user.email);
+  }
+
+  // ----------------------------
+  // SUBMIT MOBILE MONEY OTP (student)
+  // ----------------------------
+  @Roles('student')
+  @Post(':id/submit-otp')
+  @ApiOperation({ summary: 'Submit the OTP for a pending mobile money charge (student)' })
+  async submitOtp(@Param('id') id: string, @Body() dto: SubmitMomoOtpDto, @Req() req) {
+    return this.paymentsService.submitMomoOtp(id, dto.otp, req.user.sub);
   }
 
   // ----------------------------

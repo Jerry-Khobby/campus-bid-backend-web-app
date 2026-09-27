@@ -16,6 +16,18 @@ interface VerifyTransactionResult {
   [key: string]: any;
 }
 
+export interface ChargeMobileMoneyResult {
+  status: string;
+  display_text?: string;
+  reference: string;
+  [key: string]: any;
+}
+
+export interface SubmitOtpResult {
+  status: string;
+  [key: string]: any;
+}
+
 @Injectable()
 export class PaystackService {
   private readonly logger = new Logger(PaystackService.name);
@@ -29,19 +41,68 @@ export class PaystackService {
 
   async initializeTransaction(
     email: string,
-    amountKobo: number,
+    amountPesewas: number,
     reference: string,
     callbackUrl: string,
   ): Promise<InitializeTransactionResult> {
     try {
       const response = await axios.post(
         `${this.baseUrl}/transaction/initialize`,
-        { email, amount: amountKobo, reference, callback_url: callbackUrl },
+        { email, amount: amountPesewas, currency: 'GHS', reference, callback_url: callbackUrl },
         { headers: { Authorization: `Bearer ${this.secretKey}` } },
       );
       return response.data.data;
     } catch (err) {
       this.logger.error('Error initializing Paystack transaction', err);
+      throw new InternalServerErrorException('Payment gateway error');
+    }
+  }
+
+  // Direct Mobile Money charge (Paystack's Charge API) - unlike
+  // initializeTransaction, this never redirects the customer to a hosted
+  // page. Paystack responds with one of a few statuses depending on the
+  // network: 'send_otp' (customer needs to type an OTP back, via submitOtp),
+  // 'pay_offline' (customer approves a USSD/app prompt on their phone - no
+  // further action needed from us besides polling /transaction/verify), or
+  // occasionally an immediate 'success'/'failed'.
+  async chargeMobileMoney(
+    email: string,
+    amountPesewas: number,
+    reference: string,
+    phone: string,
+    provider: string,
+  ): Promise<ChargeMobileMoneyResult> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/charge`,
+        {
+          email,
+          amount: amountPesewas,
+          currency: 'GHS',
+          reference,
+          mobile_money: { phone, provider },
+        },
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+      return response.data.data;
+    } catch (err) {
+      this.logger.error('Error charging mobile money', err);
+      throw new InternalServerErrorException('Payment gateway error');
+    }
+  }
+
+  // Second step of the 'send_otp' flow above - submits the code the customer
+  // received by SMS from their provider back to Paystack to authorize the charge.
+  async submitOtp(reference: string, otp: string): Promise<SubmitOtpResult> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/charge/submit_otp`,
+        { reference, otp },
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+      return response.data.data;
+    } catch (err) {
+      this.logger.error('Error submitting mobile money OTP', err);
       throw new InternalServerErrorException('Payment gateway error');
     }
   }

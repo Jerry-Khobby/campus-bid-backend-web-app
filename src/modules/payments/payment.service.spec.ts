@@ -71,6 +71,8 @@ describe('PaymentsService', () => {
             initializeTransaction: jest.fn(),
             verifyTransaction: jest.fn(),
             verifyWebhookSignature: jest.fn(),
+            chargeMobileMoney: jest.fn(),
+            submitOtp: jest.fn(),
           },
         },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
@@ -102,13 +104,65 @@ describe('PaymentsService', () => {
 
       const result = await service.initializePayment(CUSTOMER_ID, dto, 'buyer@campus.edu');
 
-      expect(result.authorizationUrl).toBe('https://paystack.com/pay/xyz');
+      expect(result).toMatchObject({ paymentMethod: 'card', authorizationUrl: 'https://paystack.com/pay/xyz' });
       expect(paystackService.initializeTransaction).toHaveBeenCalledWith(
         'buyer@campus.edu',
         15000,
         expect.any(String),
         expect.any(String),
       );
+    });
+
+    it('charges mobile money directly instead of returning a redirect URL', async () => {
+      orderModel.findById.mockResolvedValue({
+        _id: ORDER_ID,
+        customerId: { toString: () => CUSTOMER_ID },
+        vendorId: VENDOR_ID,
+        pricing: { total: 150 },
+      });
+      paymentModel.findOne.mockResolvedValue(null);
+      paystackService.chargeMobileMoney.mockResolvedValue({
+        status: 'pay_offline',
+        display_text: 'Approve the payment prompt on your phone',
+        reference: 'ref123',
+      } as any);
+
+      const momoDto = { orderId: ORDER_ID, paymentMethod: 'mobile_money', momoProvider: 'mtn', phone: '0551234567' } as any;
+      const result = await service.initializePayment(CUSTOMER_ID, momoDto, 'buyer@campus.edu');
+
+      expect(result).toMatchObject({
+        paymentMethod: 'mobile_money',
+        status: 'pay_offline',
+        displayText: 'Approve the payment prompt on your phone',
+      });
+      expect(paystackService.chargeMobileMoney).toHaveBeenCalledWith(
+        'buyer@campus.edu',
+        15000,
+        expect.any(String),
+        '0551234567',
+        'mtn',
+      );
+      expect(paystackService.initializeTransaction).not.toHaveBeenCalled();
+    });
+
+    it('marks the payment failed when the mobile money charge fails immediately', async () => {
+      const paymentDoc = createPaymentDoc({ status: 'pending' });
+      orderModel.findById.mockResolvedValue({
+        _id: ORDER_ID,
+        customerId: { toString: () => CUSTOMER_ID },
+        vendorId: VENDOR_ID,
+        pricing: { total: 150 },
+      });
+      paymentModel.findOne.mockResolvedValue(null);
+      paymentModel.mockImplementationOnce((data: any) => paymentDoc);
+      paystackService.chargeMobileMoney.mockResolvedValue({ status: 'failed', reference: 'ref123' } as any);
+
+      const momoDto = { orderId: ORDER_ID, paymentMethod: 'mobile_money', momoProvider: 'mtn', phone: '0551234567' } as any;
+      const result = await service.initializePayment(CUSTOMER_ID, momoDto, 'buyer@campus.edu');
+
+      expect((result as any).status).toBe('failed');
+      expect(paymentDoc.status).toBe('failed');
+      expect(paymentDoc.save).toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the order does not exist', async () => {
@@ -374,6 +428,49 @@ describe('PaymentsService', () => {
       paymentModel.findById.mockResolvedValue(payment);
 
       await expect(service.releasePayment(PAYMENT_ID, CUSTOMER_ID)).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('submitMomoOtp', () => {
+    it('submits the OTP and leaves the payment pending awaiting the webhook', async () => {
+      const payment = createPaymentDoc({ status: 'pending', paymentMethod: 'mobile_money' });
+      paymentModel.findById.mockResolvedValue(payment);
+      paystackService.submitOtp.mockResolvedValue({ status: 'send_pin' } as any);
+
+      const result = await service.submitMomoOtp(PAYMENT_ID, '123456', CUSTOMER_ID);
+
+      expect(result).toEqual({ status: 'send_pin' });
+      expect(paystackService.submitOtp).toHaveBeenCalledWith(payment.transactionId, '123456');
+      expect(payment.status).toBe('pending');
+    });
+
+    it('marks the payment failed when the OTP is rejected', async () => {
+      const payment = createPaymentDoc({ status: 'pending', paymentMethod: 'mobile_money' });
+      paymentModel.findById.mockResolvedValue(payment);
+      paystackService.submitOtp.mockResolvedValue({ status: 'failed' } as any);
+
+      await service.submitMomoOtp(PAYMENT_ID, '000000', CUSTOMER_ID);
+
+      expect(payment.status).toBe('failed');
+      expect(payment.save).toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the actor is not the paying customer', async () => {
+      const payment = createPaymentDoc({ status: 'pending', paymentMethod: 'mobile_money' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      await expect(service.submitMomoOtp(PAYMENT_ID, '123456', 'someone-else')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ConflictException when the payment is not a pending mobile money charge', async () => {
+      const payment = createPaymentDoc({ status: 'held', paymentMethod: 'mobile_money' });
+      paymentModel.findById.mockResolvedValue(payment);
+
+      await expect(service.submitMomoOtp(PAYMENT_ID, '123456', CUSTOMER_ID)).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 
