@@ -6,12 +6,9 @@ import {
   InternalServerErrorException,
   ConflictException,
   Logger,
-  Inject,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import type { Cache } from 'cache-manager';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -34,7 +31,6 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payment.service';
 
 const MINUTES_TO_MILLISECONDS = 60_000;
-const ORDER_CACHE_TTL_MS = 300_000;
 
 @Injectable()
 export class OrdersService {
@@ -48,8 +44,6 @@ export class OrdersService {
     @InjectModel(Product.name)
     private readonly productModel: Model<ProductDocument>,
     @InjectModel(Vendor.name) private readonly vendorModel:Model<VendorDocument>,
-    @Inject(CACHE_MANAGER)
-    private readonly cacheManager: Cache,
     private readonly notificationsService: NotificationsService,
     private readonly paymentsService: PaymentsService,
   ) {}
@@ -101,7 +95,6 @@ export class OrdersService {
       });
 
       const saved = await order.save();
-      await this.cacheManager.set(`order:${saved._id}`, saved, 600_000);
 
       this.logger.log(`🛒 Order created by ${customer.email} for vendor ${vendor.email}`);
       return saved;
@@ -163,11 +156,11 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
   // order for as long as it stays cached.
   this.assertOrderAccess(orderLean, userId, role);
 
-  const cacheKey = `order:${orderId}`;
-  const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
-  if (cached) return this.hideDeliveryCodeFromVendor(cached, role);
-
-  // ✅ Now fetch with populate
+  // Not cached: this order gets mutated from many independent places (this
+  // module's own status transitions, plus payment.service.ts linking a
+  // payment to it), and a stale read here is exactly the kind of bug a
+  // customer notices immediately - e.g. their own payment status or
+  // delivery code looking wrong right after it changed.
   const order = await this.orderModel
     .findById(orderId)
     .populate('customerId vendorId items.productId', '-password')
@@ -177,7 +170,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
       throw new NotFoundException("Order not found");
     }
 
-  await this.cacheManager.set(cacheKey, order, 300_000);
   return this.hideDeliveryCodeFromVendor(order, role);
 }
 
@@ -190,7 +182,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
 
     Object.assign(order, dto);
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 600_000);
 
     this.logger.log(`🔄 Order updated: ${orderId}`);
     return this.hideDeliveryCodeFromVendor(updated, 'vendor');
@@ -211,7 +202,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
     });
 
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 600_000);
 
     this.logger.log(`🚚 Order status updated: ${orderId} → ${status}`);
     return this.hideDeliveryCodeFromVendor(updated, 'vendor');
@@ -241,7 +231,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
     }
 
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 300_000);
 
     this.logger.log(`❌ Order cancelled: ${orderId}`);
     return updated;
@@ -281,7 +270,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
     };
 
     const updated = await order.save();
-    await this.cacheManager.set(`order:${orderId}`, updated, 300_000);
 
     this.logger.log(`⭐ Order rated: ${orderId}`);
     return updated;
@@ -304,7 +292,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
         note: 'Auto-completed by system',
       });
       await order.save();
-      await this.cacheManager.set(`order:${order._id}`, order, 300_000);
       count++;
     }
 
@@ -330,7 +317,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
     );
     this.addStatusHistory(order, OrderStatus.ACCEPTED, 'Order accepted by vendor');
 
-    const updated = await this.saveAndCache(order);
+    const updated = await order.save();
     await this.notifyCustomer(
       updated,
       'Order Accepted',
@@ -360,7 +347,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
       await this.refundRejectedOrderPayment(order, dto.reason, vendorId);
     }
 
-    const updated = await this.saveAndCache(order);
+    const updated = await order.save();
     await this.notifyCustomer(
       updated,
       'Order Rejected',
@@ -386,7 +373,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
     order.actualDeliveryTime = new Date();
     this.addStatusHistory(order, OrderStatus.DELIVERED, 'Order marked as delivered by vendor');
 
-    const updated = await this.saveAndCache(order);
+    const updated = await order.save();
     await this.notifyCustomer(updated, 'Order Delivered', 'Your order has been delivered');
 
     return this.hideDeliveryCodeFromVendor(updated, 'vendor');
@@ -414,7 +401,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
       await this.paymentsService.releasePayment(order.paymentId.toString(), customerId);
     }
 
-    const updated = await this.saveAndCache(order);
+    const updated = await order.save();
     await this.notifyVendor(
       updated,
       'Delivery Confirmed',
@@ -487,12 +474,6 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
 
   private addStatusHistory(order: OrderDocument, status: OrderStatus, note: string): void {
     order.statusHistory.push({ status, timestamp: new Date(), note });
-  }
-
-  private async saveAndCache(order: OrderDocument): Promise<OrderDocument> {
-    const updated = await order.save();
-    await this.cacheManager.set(`order:${updated._id}`, updated, ORDER_CACHE_TTL_MS);
-    return updated;
   }
 
   private async refundRejectedOrderPayment(

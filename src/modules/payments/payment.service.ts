@@ -205,7 +205,16 @@ export class PaymentsService {
           : undefined,
     });
 
-    return payment.save();
+    const saved = await payment.save();
+
+    // The order needs to point back at whichever payment is currently
+    // active on it - cancelling, disputing, and releasing on delivery all
+    // read this field, and a retried payment (after a failed attempt)
+    // should replace it with the new one, not leave the stale reference.
+    order.paymentId = saved._id as Types.ObjectId;
+    await order.save();
+
+    return saved;
   }
 
   // -----------------------------

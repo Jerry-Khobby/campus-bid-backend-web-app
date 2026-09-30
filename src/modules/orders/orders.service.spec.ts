@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   BadRequestException,
   ConflictException,
@@ -21,7 +20,6 @@ import { OrderStatus } from './dto/order-status.enum';
 describe('OrdersService', () => {
   let service: OrdersService;
   let orderModel: any;
-  let cacheManager: any;
   let notificationsService: any;
   let paymentsService: any;
 
@@ -43,7 +41,6 @@ describe('OrdersService', () => {
 
   beforeEach(async () => {
     orderModel = { findById: jest.fn(), find: jest.fn() };
-    cacheManager = { get: jest.fn(), set: jest.fn() };
     notificationsService = { notify: jest.fn().mockResolvedValue({}) };
     paymentsService = { releasePayment: jest.fn(), refundPayment: jest.fn() };
 
@@ -54,7 +51,6 @@ describe('OrdersService', () => {
         { provide: getModelToken(User.name), useValue: {} },
         { provide: getModelToken(Product.name), useValue: {} },
         { provide: getModelToken(Vendor.name), useValue: {} },
-        { provide: CACHE_MANAGER, useValue: cacheManager },
         { provide: NotificationsService, useValue: notificationsService },
         { provide: PaymentsService, useValue: paymentsService },
       ],
@@ -424,7 +420,7 @@ describe('OrdersService', () => {
       );
     });
 
-    it('checks authorization before ever returning a cached copy of the order', async () => {
+    it('checks authorization via the cheap lean fetch before ever populating the full order', async () => {
       mockLeanFind({
         customerId: { toString: () => 'someone-else' },
         vendorId: { toString: () => vendorId },
@@ -433,27 +429,32 @@ describe('OrdersService', () => {
       await expect(service.getOrderById(orderId, customerId, 'student')).rejects.toThrow(
         ForbiddenException,
       );
-      expect(cacheManager.get).not.toHaveBeenCalled();
+      expect(orderModel.findById).toHaveBeenCalledTimes(1);
     });
 
-    it('strips the delivery code from a cached order when a vendor requests it', async () => {
+    it('strips the delivery code when a vendor requests the order', async () => {
       mockLeanFind({
         customerId: { toString: () => customerId },
         vendorId: { toString: () => vendorId },
       });
-      cacheManager.get.mockResolvedValue({ _id: orderId, deliveryCode: '4821', status: 'out_for_delivery' });
+      const populated = {
+        _id: orderId,
+        deliveryCode: '4821',
+        status: 'out_for_delivery',
+        toObject: () => ({ _id: orderId, deliveryCode: '4821', status: 'out_for_delivery' }),
+      };
+      mockPopulateFind(populated);
 
       const result = await service.getOrderById(orderId, vendorId, 'vendor');
 
       expect(result.deliveryCode).toBeUndefined();
     });
 
-    it('fetches, populates, and caches fresh when nothing is cached, keeping the code for the customer', async () => {
+    it('fetches fresh every time, keeping the delivery code for the customer', async () => {
       mockLeanFind({
         customerId: { toString: () => customerId },
         vendorId: { toString: () => vendorId },
       });
-      cacheManager.get.mockResolvedValue(null);
       const populated = {
         _id: orderId,
         deliveryCode: '4821',
@@ -463,7 +464,6 @@ describe('OrdersService', () => {
 
       const result = await service.getOrderById(orderId, customerId, 'student');
 
-      expect(cacheManager.set).toHaveBeenCalledWith(`order:${orderId}`, populated, 300_000);
       expect(result.deliveryCode).toBe('4821');
     });
   });
@@ -477,14 +477,12 @@ describe('OrdersService', () => {
       return { populate };
     }
 
-    it('always queries the database fresh, never a cache, so new orders show up immediately', async () => {
+    it('returns the freshly queried orders as-is for a student', async () => {
       mockFindChain([{ _id: 'order-1' }]);
 
       const result = await service.getOrders(customerId, 'student', {} as any);
 
       expect(result).toEqual([{ _id: 'order-1' }]);
-      expect(cacheManager.get).not.toHaveBeenCalled();
-      expect(cacheManager.set).not.toHaveBeenCalled();
     });
 
     it('filters by customerId for a student', async () => {

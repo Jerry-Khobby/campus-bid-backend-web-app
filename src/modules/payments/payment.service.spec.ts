@@ -90,12 +90,14 @@ describe('PaymentsService', () => {
     const dto = { orderId: ORDER_ID, paymentMethod: 'card' } as any;
 
     it('creates a pending payment and returns the Paystack authorization data', async () => {
-      orderModel.findById.mockResolvedValue({
+      const order = {
         _id: ORDER_ID,
         customerId: { toString: () => CUSTOMER_ID },
         vendorId: VENDOR_ID,
         pricing: { total: 150 },
-      });
+        save: jest.fn().mockResolvedValue(true),
+      };
+      orderModel.findById.mockResolvedValue(order);
       paymentModel.findOne.mockResolvedValue(null);
       paystackService.initializeTransaction.mockResolvedValue({
         authorization_url: 'https://paystack.com/pay/xyz',
@@ -114,12 +116,35 @@ describe('PaymentsService', () => {
       );
     });
 
+    it('links the order to its payment', async () => {
+      const order = {
+        _id: ORDER_ID,
+        customerId: { toString: () => CUSTOMER_ID },
+        vendorId: VENDOR_ID,
+        pricing: { total: 150 },
+        save: jest.fn().mockResolvedValue(true),
+      };
+      orderModel.findById.mockResolvedValue(order);
+      paymentModel.findOne.mockResolvedValue(null);
+      paystackService.initializeTransaction.mockResolvedValue({
+        authorization_url: 'https://paystack.com/pay/xyz',
+        access_code: 'access123',
+        reference: 'ref123',
+      } as any);
+
+      await service.initializePayment(CUSTOMER_ID, dto, 'buyer@campus.edu');
+
+      expect((order as any).paymentId).toBe(PAYMENT_ID);
+      expect(order.save).toHaveBeenCalled();
+    });
+
     it('charges mobile money directly instead of returning a redirect URL', async () => {
       orderModel.findById.mockResolvedValue({
         _id: ORDER_ID,
         customerId: { toString: () => CUSTOMER_ID },
         vendorId: VENDOR_ID,
         pricing: { total: 150 },
+        save: jest.fn().mockResolvedValue(true),
       });
       paymentModel.findOne.mockResolvedValue(null);
       paystackService.chargeMobileMoney.mockResolvedValue({
@@ -153,6 +178,7 @@ describe('PaymentsService', () => {
         customerId: { toString: () => CUSTOMER_ID },
         vendorId: VENDOR_ID,
         pricing: { total: 150 },
+        save: jest.fn().mockResolvedValue(true),
       });
       paymentModel.findOne.mockResolvedValue(null);
       paymentModel.mockImplementationOnce((data: any) => paymentDoc);
