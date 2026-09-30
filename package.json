@@ -23,7 +23,9 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "backfill-vendor-isactive": "ts-node -r tsconfig-paths/register src/scripts/backfill-vendor-isactive.ts",
     "create-admin": "ts-node -r tsconfig-paths/register src/scripts/create-admin.ts",
-    "migrate-objectid-refs": "ts-node -r tsconfig-paths/register src/scripts/migrate-objectid-refs.ts"
+    "migrate-objectid-refs": "ts-node -r tsconfig-paths/register src/scripts/migrate-objectid-refs.ts",
+    "backfill-delivery-code": "ts-node -r tsconfig-paths/register src/scripts/backfill-delivery-code.ts",
+    "backfill-order-payment-link": "ts-node -r tsconfig-paths/register src/scripts/backfill-order-payment-link.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

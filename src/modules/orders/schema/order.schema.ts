@@ -124,8 +124,15 @@ export class Order {
   // must ask the customer for it in person before markDelivered will
   // accept it, so a delivery can't be claimed without the customer actually
   // having the order in hand.
-  @Prop({ type: String, required: true })
-  deliveryCode: string;
+  //
+  // Not required: orders placed before this field existed have none, and
+  // marking `required` would fail validation on every save() of an older
+  // order (cancel, confirm-delivery, accept, ...), not just markDelivered.
+  // A missing code simply means that order can never match a submitted one,
+  // which is the safe failure mode - see the backfill script for making
+  // markDelivered work again on pre-existing orders.
+  @Prop({ type: String })
+  deliveryCode?: string;
 
   @Prop() estimatedDeliveryTime?: Date;
   @Prop() actualDeliveryTime?: Date;
