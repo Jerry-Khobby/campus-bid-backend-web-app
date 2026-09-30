@@ -33,6 +33,7 @@ const DEFAULT_LIMIT = 10;
 export interface SafeProduct {
   _id: string;
   vendorId: string;
+  vendorName?: string;
   name: string;
   description?: string;
   category: string;
@@ -211,7 +212,10 @@ export class ProductsService {
       this.productModel.countDocuments(query),
     ]);
 
-    const items = rawItems.map((r) => this.toSafeProductFromObject(r));
+    const vendorNameById = await this.getVendorNamesByIds(rawItems.map((r) => r.vendorId));
+    const items = rawItems.map((r) =>
+      this.toSafeProductFromObject(r, vendorNameById.get(r.vendorId?.toString())),
+    );
     await this.cacheManager.set(cacheKey, { items, total }, 60_000);
 
     return { items, total, page, limit };
@@ -389,12 +393,27 @@ export class ProductsService {
   // -----------------------
   // Helpers
   // -----------------------
+  // One batched query for a whole page of products, instead of a lookup per
+  // product - the same information listProducts needs but without turning a
+  // single list call into N+1 queries.
+  private async getVendorNamesByIds(vendorIds: Types.ObjectId[]): Promise<Map<string, string>> {
+    const ids = [...new Set(vendorIds.filter(Boolean).map((id) => id.toString()))];
+    if (ids.length === 0) return new Map();
+
+    const vendors = await this.vendorModel
+      .find({ _id: { $in: ids } })
+      .select('profile.businessName')
+      .lean();
+
+    return new Map(vendors.map((v) => [(v._id as Types.ObjectId).toString(), v.profile?.businessName]));
+  }
+
   private toSafeProduct(doc: ProductDocument): SafeProduct {
     const obj = doc.toObject ? doc.toObject() : (doc as any);
     return this.toSafeProductFromObject(obj);
   }
 
-  private toSafeProductFromObject(obj: any): SafeProduct {
+  private toSafeProductFromObject(obj: any, vendorName?: string): SafeProduct {
     const {
       _id,
       vendorId,
@@ -421,6 +440,7 @@ export class ProductsService {
     return {
       _id: (_id as Types.ObjectId).toString(),
       vendorId: vendorId ? vendorId.toString() : null,
+      vendorName,
       name,
       description,
       category,

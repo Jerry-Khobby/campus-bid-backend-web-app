@@ -29,7 +29,7 @@ describe("ProductsService", () => {
     productModel.countDocuments = jest.fn();
     productModel.findByIdAndDelete = jest.fn();
 
-    vendorModel = { aggregate: jest.fn() };
+    vendorModel = { aggregate: jest.fn(), find: jest.fn() };
 
     cacheManager = {
       get: jest.fn(),
@@ -183,6 +183,61 @@ describe("ProductsService", () => {
       const result = await service.getNearbyProducts({ latitude: 5.6, longitude: -0.2 } as any);
 
       expect(result.total).toBe(0);
+    });
+  });
+
+  describe("listProducts", () => {
+    function mockProductFind(items: any[]) {
+      const lean = jest.fn().mockResolvedValue(items);
+      const limit = jest.fn().mockReturnValue({ lean });
+      const skip = jest.fn().mockReturnValue({ limit });
+      const sort = jest.fn().mockReturnValue({ skip });
+      productModel.find.mockReturnValue({ sort });
+    }
+
+    function mockVendorFind(vendors: any[]) {
+      const lean = jest.fn().mockResolvedValue(vendors);
+      const select = jest.fn().mockReturnValue({ lean });
+      vendorModel.find.mockReturnValue({ select });
+    }
+
+    it("attaches each product's vendor business name from a single batched lookup", async () => {
+      const otherVendorId = new Types.ObjectId().toString();
+      mockProductFind([
+        { _id: productId, vendorId, name: "Beans" },
+        { _id: new Types.ObjectId().toString(), vendorId: otherVendorId, name: "Rice" },
+      ]);
+      mockVendorFind([
+        { _id: vendorId, profile: { businessName: "Campus Bakery" } },
+        { _id: otherVendorId, profile: { businessName: "Study Supply Co" } },
+      ]);
+      productModel.countDocuments.mockResolvedValue(2);
+
+      const result = await service.listProducts({} as any);
+
+      expect(vendorModel.find).toHaveBeenCalledWith({ _id: { $in: expect.arrayContaining([vendorId, otherVendorId]) } });
+      expect(result.items.map((i) => i.vendorName)).toEqual(["Campus Bakery", "Study Supply Co"]);
+    });
+
+    it("still returns products when a product's vendor no longer exists", async () => {
+      mockProductFind([{ _id: productId, vendorId, name: "Beans" }]);
+      mockVendorFind([]);
+      productModel.countDocuments.mockResolvedValue(1);
+
+      const result = await service.listProducts({} as any);
+
+      expect(result.items[0].vendorName).toBeUndefined();
+      expect(result.items[0].name).toBe("Beans");
+    });
+
+    it("skips the vendor lookup entirely when the page has no products", async () => {
+      mockProductFind([]);
+      productModel.countDocuments.mockResolvedValue(0);
+
+      const result = await service.listProducts({} as any);
+
+      expect(vendorModel.find).not.toHaveBeenCalled();
+      expect(result.items).toEqual([]);
     });
   });
 });
