@@ -388,10 +388,17 @@ export class VendorController {
   async googleCallback(@Req() req, @Res() res: Response) {
     // req.user comes from GoogleStrategy.validate(). The browser is
     // mid-redirect from Google, so it can't read a JSON response here — hand
-    // the tokens off via a redirect to a frontend page that stores them.
-    const { accessToken, refreshToken } = await this.vendorService.handleGoogleLogin(req.user);
+    // the outcome off via a redirect to a frontend page that stores the
+    // tokens (or shows the error) instead of throwing straight to the user.
     const appUrl = this.configService.get<string>('VENDOR_APP_URL') ?? 'http://localhost:5002';
-    res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+
+    try {
+      const { accessToken, refreshToken } = await this.vendorService.handleGoogleLogin(req.user);
+      res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Google login failed';
+      res.redirect(`${appUrl}/auth/google/callback?error=${encodeURIComponent(message)}`);
+    }
   }
 
   // ✅ ADMIN — list every vendor regardless of approval/active state

@@ -417,32 +417,20 @@ async handleGoogleLogin(googleUser: {
 
   const email = googleUser.email.toLowerCase();
 
-  //Check if vendor already exists
-  let vendor = await this.vendorModel.findOne({ email });
-
-  if (vendor) {
-    if (!vendor.oauth?.googleId) {
-      vendor.oauth = { googleId: googleUser.googleId };
-      vendor.authProvider = "google";
-      await vendor.save();
-    }
+  // Vendors are onboarded by admins, not self-service - Google sign-in is
+  // only a login method for an account that already exists, never a way to
+  // create one.
+  const vendor = await this.vendorModel.findOne({ email });
+  if (!vendor) {
+    throw new NotFoundException(
+      "No vendor account found for this email. Contact an admin to get set up."
+    );
   }
 
-  // If vendor does NOT exist, create a new OAuth vendor
-  if (!vendor) {
-    vendor = await this.vendorModel.create({
-      email,
-      password: null, // OAuth users don’t need a password
-      authProvider: "google",
-      isVerified: true,
-      oauth: { googleId: googleUser.googleId },
-      profile: {
-        businessName: googleUser.firstName + " " + googleUser.lastName,
-        logo: googleUser.profileImage || null,
-        phoneNumber: "",
-      },
-      role: "vendor",
-    });
+  if (!vendor.oauth?.googleId) {
+    vendor.oauth = { googleId: googleUser.googleId };
+    vendor.authProvider = "google";
+    await vendor.save();
   }
 
   const vendorId = (vendor._id as Types.ObjectId).toString();

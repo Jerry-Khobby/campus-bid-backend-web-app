@@ -24,6 +24,7 @@ describe('VendorService', () => {
   let cacheManager: any;
   let payoutsService: any;
   let flashSaleService: any;
+  let jwtService: any;
 
   const vendorId = new Types.ObjectId().toString();
 
@@ -58,6 +59,7 @@ describe('VendorService', () => {
       findById: jest.fn(),
       findOne: jest.fn(),
       find: jest.fn(),
+      findByIdAndUpdate: jest.fn(),
       countDocuments: jest.fn(),
       aggregate: jest.fn(),
     };
@@ -66,6 +68,7 @@ describe('VendorService', () => {
     cacheManager = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
     payoutsService = { getVendorBalances: jest.fn() };
     flashSaleService = { getVendorFlashSales: jest.fn() };
+    jwtService = { signAsync: jest.fn().mockResolvedValue('signed-token') };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -73,7 +76,7 @@ describe('VendorService', () => {
         { provide: getModelToken(Vendor.name), useValue: vendorModel },
         { provide: getModelToken(Product.name), useValue: productModel },
         { provide: getModelToken(Order.name), useValue: orderModel },
-        { provide: JwtService, useValue: { signAsync: jest.fn() } },
+        { provide: JwtService, useValue: jwtService },
         { provide: CACHE_MANAGER, useValue: cacheManager },
         { provide: MailService, useValue: { sendEmail: jest.fn() } },
         { provide: ConfigService, useValue: { get: jest.fn() } },
@@ -248,6 +251,47 @@ describe('VendorService', () => {
       const result = await service.getProductAnalytics(vendorId, { page: 1, limit: 10 } as any);
 
       expect(result).toEqual({ items: [{ name: 'Widget' }], total: 1, page: 1, limit: 10 });
+    });
+  });
+
+  describe('handleGoogleLogin', () => {
+    const googleUser = {
+      googleId: 'google-123',
+      email: 'Vendor@Test.com',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      profileImage: 'https://example.com/photo.jpg',
+    };
+
+    it('rejects sign-in when no vendor account exists for the email', async () => {
+      vendorModel.findOne.mockResolvedValue(null);
+
+      await expect(service.handleGoogleLogin(googleUser)).rejects.toThrow(NotFoundException);
+      expect(vendorModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('links the Google account to an existing vendor on first OAuth login', async () => {
+      const vendor = buildVendorDoc({ oauth: undefined, save: jest.fn().mockResolvedValue(undefined) });
+      vendorModel.findOne.mockResolvedValue(vendor);
+      vendorModel.findByIdAndUpdate.mockResolvedValue(vendor);
+
+      const result = await service.handleGoogleLogin(googleUser);
+
+      expect((vendor as any).oauth).toEqual({ googleId: 'google-123' });
+      expect((vendor as any).authProvider).toBe('google');
+      expect(vendor.save).toHaveBeenCalled();
+      expect(result.vendor).toBeDefined();
+      expect(result.accessToken).toBe('signed-token');
+    });
+
+    it('logs in without re-linking when the vendor already has this Google account', async () => {
+      const vendor = buildVendorDoc({ oauth: { googleId: 'google-123' }, save: jest.fn() });
+      vendorModel.findOne.mockResolvedValue(vendor);
+      vendorModel.findByIdAndUpdate.mockResolvedValue(vendor);
+
+      await service.handleGoogleLogin(googleUser);
+
+      expect(vendor.save).not.toHaveBeenCalled();
     });
   });
 });
