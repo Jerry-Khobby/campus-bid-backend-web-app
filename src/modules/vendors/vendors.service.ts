@@ -417,13 +417,13 @@ async handleGoogleLogin(googleUser: {
 
   const email = googleUser.email.toLowerCase();
 
-  // Vendors are onboarded by admins, not self-service - Google sign-in is
-  // only a login method for an account that already exists, never a way to
-  // create one.
+  // Vendors do self-register, just not through Google - it's a login method
+  // for an account that already exists, never a way to create one, so an
+  // unmatched email is pointed at the real sign-up form instead.
   const vendor = await this.vendorModel.findOne({ email });
   if (!vendor) {
     throw new NotFoundException(
-      "No vendor account found for this email. Contact an admin to get set up."
+      "No vendor account found for this email. Sign up below with this email to create one - you'll need admin approval before you can start selling."
     );
   }
 

@@ -397,7 +397,8 @@ export class VendorController {
       res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Google login failed';
-      res.redirect(`${appUrl}/auth/google/callback?error=${encodeURIComponent(message)}`);
+      const email = req.user?.email ? `&email=${encodeURIComponent(req.user.email)}` : '';
+      res.redirect(`${appUrl}/auth/google/callback?error=${encodeURIComponent(message)}${email}`);
     }
   }
 
