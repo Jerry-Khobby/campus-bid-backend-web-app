@@ -295,10 +295,11 @@ describe('PaymentsService', () => {
       expect(payment.status).toBe('failed');
     });
 
-    it('marks a pending payment as failed on charge.failed', async () => {
+    it('marks a pending payment as failed on charge.failed, verified against Paystack', async () => {
       paystackService.verifyWebhookSignature.mockReturnValue(true);
       const payment = createPaymentDoc({ status: 'pending' });
       paymentModel.findOne.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'failed', amount: 15000 } as any);
 
       await service.handleWebhook(Buffer.from('{}'), 'sig', {
         event: 'charge.failed',
@@ -307,6 +308,21 @@ describe('PaymentsService', () => {
 
       expect(payment.status).toBe('failed');
       expect(payment.save).toHaveBeenCalled();
+    });
+
+    it('leaves a payment pending when Paystack still reports it as in progress', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+      const payment = createPaymentDoc({ status: 'pending' });
+      paymentModel.findOne.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'pending', amount: 15000 } as any);
+
+      await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'charge.failed',
+        data: { reference: 'ref123' },
+      });
+
+      expect(payment.status).toBe('pending');
+      expect(payment.save).not.toHaveBeenCalled();
     });
   });
 
@@ -370,6 +386,27 @@ describe('PaymentsService', () => {
       const payment = createPaymentDoc();
       paymentModel.findById.mockResolvedValue(payment);
       await expect(service.findById(PAYMENT_ID)).resolves.toBe(payment);
+    });
+
+    it('self-heals a stuck pending payment by re-verifying with Paystack', async () => {
+      const payment = createPaymentDoc({ status: 'pending', amount: 150 });
+      paymentModel.findById.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'success', amount: 15000 } as any);
+
+      const result = await service.findById(PAYMENT_ID);
+
+      expect(paystackService.verifyTransaction).toHaveBeenCalledWith(payment.transactionId);
+      expect(result.status).toBe('held');
+    });
+
+    it('returns the payment still pending if reconciliation itself fails', async () => {
+      const payment = createPaymentDoc({ status: 'pending' });
+      paymentModel.findById.mockResolvedValue(payment);
+      paystackService.verifyTransaction.mockRejectedValue(new Error('network down'));
+
+      const result = await service.findById(PAYMENT_ID);
+
+      expect(result.status).toBe('pending');
     });
   });
 

@@ -225,29 +225,42 @@ export class PaymentsService {
 
     if (payment.status !== 'pending') return { received: true };
 
-    if (event.event === 'charge.success') {
-      await this.confirmSuccessfulCharge(payment, event.data.reference);
-    } else {
-      await this.markPaymentFailed(payment, event.data);
-    }
+    // Re-verify against Paystack's API for both events rather than trusting
+    // the webhook body directly - same reasoning as the amount/status check
+    // below: a webhook payload is a hint to check, not a source of truth.
+    await this.reconcileWithPaystack(payment);
 
     return { received: true };
   }
 
-  private async confirmSuccessfulCharge(payment: PaymentDocument, reference: string): Promise<void> {
-    const verified = await this.paystackService.verifyTransaction(reference);
+  // Independently asks Paystack for a payment's real status and applies
+  // whatever it finds. Used by the webhook above, and also called whenever a
+  // 'pending' payment is fetched (see findById) so the system self-heals if
+  // a webhook is ever missed, delayed, or never configured at all - Paystack
+  // webhooks are a courtesy notification, not the only way to find out.
+  private async reconcileWithPaystack(payment: PaymentDocument): Promise<void> {
+    const verified = await this.paystackService.verifyTransaction(payment.transactionId);
 
-    if (!this.isVerifiedChargeValid(verified, payment.amount)) {
-      this.logger.error(`Webhook amount/status mismatch for payment ${payment._id} - marking failed`);
-      await this.markPaymentFailed(payment, verified);
-      await this.notifyAdminsOfChargeMismatch(payment, verified);
+    if (this.isVerifiedChargeValid(verified, payment.amount)) {
+      payment.status = 'held';
+      payment.holdStartTime = new Date();
+      payment.gatewayResponse = verified;
+      await payment.save();
       return;
     }
 
-    payment.status = 'held';
-    payment.holdStartTime = new Date();
-    payment.gatewayResponse = verified;
-    await payment.save();
+    // Paystack itself still has this in flight (e.g. the customer hasn't
+    // approved a mobile money prompt yet) - leave it pending for now.
+    if (['pending', 'processing', 'ongoing', 'queued'].includes(verified.status)) {
+      return;
+    }
+
+    if (verified.status === 'success') {
+      this.logger.error(`Amount/status mismatch reconciling payment ${payment._id} - marking failed`);
+      await this.notifyAdminsOfChargeMismatch(payment, verified);
+    }
+
+    await this.markPaymentFailed(payment, verified);
   }
 
   private async notifyAdminsOfChargeMismatch(
@@ -291,6 +304,20 @@ export class PaymentsService {
     if (!Types.ObjectId.isValid(paymentId)) throw new BadRequestException('Invalid paymentId');
     const payment = await this.paymentModel.findById(paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
+
+    // Self-heal: a client polling this endpoint (e.g. the checkout callback
+    // page) would otherwise be stuck on 'pending' forever if Paystack's
+    // webhook never arrives. Reconciliation failures here shouldn't break
+    // the read - the caller just sees the payment still pending and the next
+    // poll (or the webhook, if it does arrive) can resolve it instead.
+    if (payment.status === 'pending') {
+      try {
+        await this.reconcileWithPaystack(payment);
+      } catch (error) {
+        this.logger.warn(`Reconciliation failed for payment ${payment._id}: ${error.message}`);
+      }
+    }
+
     return payment;
   }
 
