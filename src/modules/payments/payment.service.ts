@@ -434,9 +434,15 @@ export class PaymentsService {
     if (payment.status !== 'held')
       throw new ConflictException('Payment cannot be refunded in current state');
 
+    // Actually reverse the charge with Paystack before touching our own
+    // records - if this throws, the payment stays 'held' and the customer
+    // is told the refund failed, rather than us claiming success on a
+    // refund that never happened.
+    const refund = await this.paystackService.refundTransaction(payment.transactionId);
+
     payment.status = 'refunded';
     payment.refundTime = new Date();
-    payment.metadata = { ...(payment.metadata || {}), refundReason: dto.reason };
+    payment.metadata = { ...(payment.metadata || {}), refundReason: dto.reason, refund };
     await payment.save();
 
     this.logger.warn(`Payment ${payment._id} refunded for reason: ${dto.reason}`);

@@ -28,6 +28,11 @@ export interface SubmitOtpResult {
   [key: string]: any;
 }
 
+export interface RefundResult {
+  status: string;
+  [key: string]: any;
+}
+
 @Injectable()
 export class PaystackService {
   private readonly logger = new Logger(PaystackService.name);
@@ -115,6 +120,24 @@ export class PaystackService {
       return response.data.data;
     } catch (err) {
       this.logger.error('Error verifying Paystack transaction', err);
+      throw new InternalServerErrorException('Payment gateway error');
+    }
+  }
+
+  // Actually sends the customer's money back, via Paystack's own refund API -
+  // reversing the original charge rather than just flipping a status in our
+  // own database. Paystack processes refunds asynchronously; the immediate
+  // response just confirms the request was accepted.
+  async refundTransaction(reference: string): Promise<RefundResult> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/refund`,
+        { transaction: reference },
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+      return response.data.data;
+    } catch (err) {
+      this.logger.error('Error refunding Paystack transaction', err);
       throw new InternalServerErrorException('Payment gateway error');
     }
   }

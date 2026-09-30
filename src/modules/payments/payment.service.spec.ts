@@ -73,6 +73,7 @@ describe('PaymentsService', () => {
             verifyWebhookSignature: jest.fn(),
             chargeMobileMoney: jest.fn(),
             submitOtp: jest.fn(),
+            refundTransaction: jest.fn(),
           },
         },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
@@ -514,20 +515,40 @@ describe('PaymentsService', () => {
   describe('refundPayment', () => {
     const dto = { reason: 'item never arrived' } as any;
 
-    it('refunds a held payment for its owning customer', async () => {
-      const payment = createPaymentDoc({ status: 'held' });
+    beforeEach(() => {
+      paystackService.refundTransaction.mockResolvedValue({ status: 'pending' } as any);
+    });
+
+    it('actually reverses the charge with Paystack before marking it refunded', async () => {
+      const payment = createPaymentDoc({ status: 'held', transactionId: 'ref123' });
       paymentModel.findById.mockResolvedValue(payment);
 
       const result = await service.refundPayment(PAYMENT_ID, dto, CUSTOMER_ID);
 
+      expect(paystackService.refundTransaction).toHaveBeenCalledWith('ref123');
       expect(result.status).toBe('refunded');
       expect(result.metadata?.refundReason).toBe('item never arrived');
+      expect(result.metadata?.refund).toEqual({ status: 'pending' });
       expect(notificationsService.notifyAllAdmins).toHaveBeenCalledWith(
         'payment_disputed',
         expect.any(String),
         expect.stringContaining('item never arrived'),
         expect.objectContaining({ paymentId: PAYMENT_ID }),
       );
+    });
+
+    it('leaves the payment held and does not notify admins when Paystack rejects the refund', async () => {
+      const payment = createPaymentDoc({ status: 'held' });
+      paymentModel.findById.mockResolvedValue(payment);
+      paystackService.refundTransaction.mockRejectedValue(new Error('Payment gateway error'));
+
+      await expect(service.refundPayment(PAYMENT_ID, dto, CUSTOMER_ID)).rejects.toThrow(
+        'Payment gateway error',
+      );
+
+      expect(payment.status).toBe('held');
+      expect(payment.save).not.toHaveBeenCalled();
+      expect(notificationsService.notifyAllAdmins).not.toHaveBeenCalled();
     });
 
     it('still refunds the payment when notifying admins fails', async () => {
@@ -556,6 +577,7 @@ describe('PaymentsService', () => {
       await expect(service.refundPayment(PAYMENT_ID, dto, 'someone-else')).rejects.toThrow(
         ForbiddenException,
       );
+      expect(paystackService.refundTransaction).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the payment is not held', async () => {
@@ -565,6 +587,7 @@ describe('PaymentsService', () => {
       await expect(service.refundPayment(PAYMENT_ID, dto, CUSTOMER_ID)).rejects.toThrow(
         ConflictException,
       );
+      expect(paystackService.refundTransaction).not.toHaveBeenCalled();
     });
   });
 

@@ -128,6 +128,28 @@ describe('PaystackService', () => {
     });
   });
 
+  describe('refundTransaction', () => {
+    it('requests a refund and returns the gateway status', async () => {
+      const refundData = { status: 'pending', amount: 10000 };
+      mockedAxios.post.mockResolvedValue({ data: { data: refundData } });
+
+      const result = await service.refundTransaction('ref123');
+
+      expect(result).toEqual(refundData);
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'https://api.paystack.co/refund',
+        { transaction: 'ref123' },
+        { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
+      );
+    });
+
+    it('throws InternalServerErrorException when the gateway call fails', async () => {
+      mockedAxios.post.mockRejectedValue(new Error('network down'));
+
+      await expect(service.refundTransaction('ref123')).rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
   describe('verifyWebhookSignature', () => {
     it('returns true when the signature matches the computed hash', () => {
       const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success' }));
