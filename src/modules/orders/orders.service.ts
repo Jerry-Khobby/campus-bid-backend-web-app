@@ -84,13 +84,15 @@ export class OrdersService {
         }
       }
 
-      // ✅ 5. Generate order number
+      // ✅ 5. Generate order number and delivery code
       const orderNumber = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const deliveryCode = String(Math.floor(1000 + Math.random() * 9000));
 
       // ✅ 6. Create order
       const order = new this.orderModel({
         ...dto,
         orderNumber,
+        deliveryCode,
         customerId,
         status: OrderStatus.PENDING,
         statusHistory: [
@@ -117,37 +119,53 @@ export class OrdersService {
   // caching it correctly would mean remembering to invalidate it from every
   // one of them. A customer seeing their own order list a few minutes stale
   // is a worse bug than the DB load saved by caching it.
-  async getOrders(userId: string, role: string, query: OrderQueryDto) {
+  async getOrders(userId: string, role: string, query: OrderQueryDto): Promise<any[]> {
     const filter: any = {};
     if (role === 'student') filter.customerId = userId;
     if (role === 'vendor') filter.vendorId = userId;
     if (query.status) filter.status = query.status;
 
-    return this.orderModel
+    const orders = await this.orderModel
       .find(filter)
       .populate('customerId vendorId items.productId', '-password')
       .sort({ createdAt: -1 })
       .exec();
+
+    return orders.map((order) => this.hideDeliveryCodeFromVendor(order, role));
+  }
+
+  // The delivery code is only meaningful as proof the CUSTOMER handed it to
+  // the vendor in person - a vendor who could just read it off their own
+  // order view could enter it themselves and mark anything "delivered".
+  private hideDeliveryCodeFromVendor(order: OrderDocument, role: string): any {
+    if (role !== 'vendor') return order;
+    const obj = typeof (order as any).toObject === 'function' ? (order as any).toObject() : order;
+    const { deliveryCode, ...rest } = obj;
+    return rest;
   }
 
   // -------------------------
   // GET SINGLE ORDER
   // -------------------------
-async getOrderById(orderId: string, userId: string, role: string): Promise<OrderDocument> {
+async getOrderById(orderId: string, userId: string, role: string): Promise<any> {
   if (!Types.ObjectId.isValid(orderId)) {
     throw new BadRequestException('Invalid order ID');
   }
-
-  const cacheKey = `order:${orderId}`;
-  const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
-  if (cached) return cached;
 
   // ✅ Use lean() for faster check
   const orderLean = await this.orderModel.findById(orderId).lean().exec();
   if (!orderLean) throw new NotFoundException('Order not found');
 
-  // ✅ Check authorization with ObjectIds
+  // ✅ Check authorization with ObjectIds - this has to happen before the
+  // cache read below, not after: the cached copy is shared across every
+  // caller of this order id regardless of who they are, so serving it
+  // first would let anyone who can guess an order id read someone else's
+  // order for as long as it stays cached.
   this.assertOrderAccess(orderLean, userId, role);
+
+  const cacheKey = `order:${orderId}`;
+  const cached = await this.cacheManager.get<OrderDocument>(cacheKey);
+  if (cached) return this.hideDeliveryCodeFromVendor(cached, role);
 
   // ✅ Now fetch with populate
   const order = await this.orderModel
@@ -160,13 +178,13 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     }
 
   await this.cacheManager.set(cacheKey, order, 300_000);
-  return order;
+  return this.hideDeliveryCodeFromVendor(order, role);
 }
 
   // -------------------------
   // UPDATE ORDER (Vendor Only)
   // -------------------------
-  async updateOrder(orderId: string, dto: UpdateOrderDto): Promise<OrderDocument> {
+  async updateOrder(orderId: string, dto: UpdateOrderDto): Promise<any> {
     const order = await this.orderModel.findById(orderId);
     if (!order) throw new NotFoundException('Order not found');
 
@@ -175,13 +193,13 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     await this.cacheManager.set(`order:${orderId}`, updated, 600_000);
 
     this.logger.log(`🔄 Order updated: ${orderId}`);
-    return updated;
+    return this.hideDeliveryCodeFromVendor(updated, 'vendor');
   }
 
   // -------------------------
   // UPDATE STATUS (Vendor/Admin)
   // -------------------------
-  async updateOrderStatus(orderId: string, vendorId: string, status: OrderStatus): Promise<OrderDocument> {
+  async updateOrderStatus(orderId: string, vendorId: string, status: OrderStatus): Promise<any> {
     const order = await this.findOrderOrFail(orderId);
     this.assertVendorOwnsOrder(order, vendorId);
 
@@ -196,7 +214,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     await this.cacheManager.set(`order:${orderId}`, updated, 600_000);
 
     this.logger.log(`🚚 Order status updated: ${orderId} → ${status}`);
-    return updated;
+    return this.hideDeliveryCodeFromVendor(updated, 'vendor');
   }
 
   // -------------------------
@@ -301,7 +319,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     orderId: string,
     vendorId: string,
     dto: AcceptOrderDto,
-  ): Promise<OrderDocument> {
+  ): Promise<any> {
     const order = await this.findOrderOrFail(orderId);
     this.assertVendorOwnsOrder(order, vendorId);
     this.assertOrderStatus(order, OrderStatus.PENDING);
@@ -319,7 +337,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
       'Your order has been accepted and is being prepared',
     );
 
-    return updated;
+    return this.hideDeliveryCodeFromVendor(updated, 'vendor');
   }
 
   // -------------------------
@@ -329,7 +347,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     orderId: string,
     vendorId: string,
     dto: RejectOrderDto,
-  ): Promise<OrderDocument> {
+  ): Promise<any> {
     const order = await this.findOrderOrFail(orderId);
     this.assertVendorOwnsOrder(order, vendorId);
     this.assertOrderStatus(order, OrderStatus.PENDING);
@@ -349,16 +367,20 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
       `Your order was rejected: ${dto.reason}`,
     );
 
-    return updated;
+    return this.hideDeliveryCodeFromVendor(updated, 'vendor');
   }
 
   // -------------------------
   // MARK DELIVERED (Vendor)
   // -------------------------
-  async markDelivered(orderId: string, vendorId: string): Promise<OrderDocument> {
+  async markDelivered(orderId: string, vendorId: string, deliveryCode: string): Promise<any> {
     const order = await this.findOrderOrFail(orderId);
     this.assertVendorOwnsOrder(order, vendorId);
     this.assertOrderStatus(order, OrderStatus.OUT_FOR_DELIVERY);
+
+    if (order.deliveryCode !== deliveryCode) {
+      throw new ForbiddenException('That code doesn\'t match - ask the customer to read it out again');
+    }
 
     order.status = OrderStatus.DELIVERED;
     order.actualDeliveryTime = new Date();
@@ -367,7 +389,7 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<Order
     const updated = await this.saveAndCache(order);
     await this.notifyCustomer(updated, 'Order Delivered', 'Your order has been delivered');
 
-    return updated;
+    return this.hideDeliveryCodeFromVendor(updated, 'vendor');
   }
 
   // -------------------------

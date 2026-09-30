@@ -25,6 +25,7 @@ import { OrderQueryDto } from './dto/order-query.dto';
 import { AcceptOrderDto } from './dto/accept-order.dto';
 import { RejectOrderDto } from './dto/reject-order.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
+import { MarkDeliveredDto } from './dto/mark-delivered.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
@@ -122,8 +123,8 @@ export class OrdersController {
   @Roles('vendor')
   @Patch(':id/mark-delivered')
   @ApiBearerAuth()
-  async markDelivered(@Request() req, @Param('id') id: string) {
-    const data = await this.ordersService.markDelivered(id, req.user.sub);
+  async markDelivered(@Request() req, @Param('id') id: string, @Body() dto: MarkDeliveredDto) {
+    const data = await this.ordersService.markDelivered(id, req.user.sub, dto.deliveryCode);
     return { success: true, message: 'Order marked as delivered', data };
   }
 

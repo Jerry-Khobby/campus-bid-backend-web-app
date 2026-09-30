@@ -121,6 +121,16 @@ describe('OrdersService', () => {
         service.acceptOrder(orderId, vendorId, { estimatedPreparationTime: 30 }),
       ).resolves.toBeDefined();
     });
+
+    it("never returns the delivery code to the vendor who just accepted the order", async () => {
+      const order = buildOrder({ deliveryCode: '4821' });
+      order.save.mockResolvedValue(order);
+      orderModel.findById.mockResolvedValue(order);
+
+      const result = await service.acceptOrder(orderId, vendorId, { estimatedPreparationTime: 30 });
+
+      expect(result.deliveryCode).toBeUndefined();
+    });
   });
 
   describe('rejectOrder', () => {
@@ -179,24 +189,43 @@ describe('OrdersService', () => {
         service.rejectOrder(orderId, vendorId, { reason: 'Out of stock' }),
       ).rejects.toThrow(ConflictException);
     });
-  });
 
-  describe('markDelivered', () => {
-    it('marks an out-for-delivery order as delivered', async () => {
-      const order = buildOrder({ status: OrderStatus.OUT_FOR_DELIVERY });
+    it('never returns the delivery code to the rejecting vendor', async () => {
+      const order = buildOrder({ deliveryCode: '4821' });
       order.save.mockResolvedValue(order);
       orderModel.findById.mockResolvedValue(order);
 
-      const result = await service.markDelivered(orderId, vendorId);
+      const result = await service.rejectOrder(orderId, vendorId, { reason: 'Out of stock' });
+
+      expect(result.deliveryCode).toBeUndefined();
+    });
+  });
+
+  describe('markDelivered', () => {
+    it('marks an out-for-delivery order as delivered when the code matches', async () => {
+      const order = buildOrder({ status: OrderStatus.OUT_FOR_DELIVERY, deliveryCode: '4821' });
+      order.save.mockResolvedValue(order);
+      orderModel.findById.mockResolvedValue(order);
+
+      const result = await service.markDelivered(orderId, vendorId, '4821');
 
       expect(result.status).toBe(OrderStatus.DELIVERED);
       expect(result.actualDeliveryTime).toBeInstanceOf(Date);
+      expect(result.deliveryCode).toBeUndefined();
+    });
+
+    it('throws ForbiddenException when the delivery code does not match', async () => {
+      const order = buildOrder({ status: OrderStatus.OUT_FOR_DELIVERY, deliveryCode: '4821' });
+      orderModel.findById.mockResolvedValue(order);
+
+      await expect(service.markDelivered(orderId, vendorId, '0000')).rejects.toThrow(ForbiddenException);
+      expect(order.save).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the order is not out for delivery', async () => {
       orderModel.findById.mockResolvedValue(buildOrder({ status: OrderStatus.PENDING }));
 
-      await expect(service.markDelivered(orderId, vendorId)).rejects.toThrow(ConflictException);
+      await expect(service.markDelivered(orderId, vendorId, '4821')).rejects.toThrow(ConflictException);
     });
 
     it('throws ForbiddenException when the order belongs to another vendor', async () => {
@@ -207,13 +236,13 @@ describe('OrdersService', () => {
         }),
       );
 
-      await expect(service.markDelivered(orderId, vendorId)).rejects.toThrow(ForbiddenException);
+      await expect(service.markDelivered(orderId, vendorId, '4821')).rejects.toThrow(ForbiddenException);
     });
 
     it('throws NotFoundException when the order does not exist', async () => {
       orderModel.findById.mockResolvedValue(null);
 
-      await expect(service.markDelivered(orderId, vendorId)).rejects.toThrow(NotFoundException);
+      await expect(service.markDelivered(orderId, vendorId, '4821')).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -345,6 +374,100 @@ describe('OrdersService', () => {
     });
   });
 
+  describe('updateOrderStatus', () => {
+    it("updates the status and never returns the delivery code to the vendor", async () => {
+      const order = buildOrder({ status: OrderStatus.ACCEPTED, deliveryCode: '4821' });
+      order.save.mockResolvedValue(order);
+      orderModel.findById.mockResolvedValue(order);
+
+      const result = await service.updateOrderStatus(orderId, vendorId, OrderStatus.PREPARING);
+
+      expect(result.status).toBe(OrderStatus.PREPARING);
+      expect(result.deliveryCode).toBeUndefined();
+    });
+
+    it('throws ForbiddenException when the order belongs to another vendor', async () => {
+      orderModel.findById.mockResolvedValue(
+        buildOrder({ vendorId: { toString: () => 'someone-else' } }),
+      );
+
+      await expect(
+        service.updateOrderStatus(orderId, vendorId, OrderStatus.PREPARING),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('getOrderById', () => {
+    function mockLeanFind(result: any) {
+      const exec = jest.fn().mockResolvedValue(result);
+      const lean = jest.fn().mockReturnValue({ exec });
+      orderModel.findById.mockReturnValueOnce({ lean });
+    }
+
+    function mockPopulateFind(result: any) {
+      const exec = jest.fn().mockResolvedValue(result);
+      const populate = jest.fn().mockReturnValue({ exec });
+      orderModel.findById.mockReturnValueOnce({ populate });
+    }
+
+    it('throws BadRequestException for a malformed id', async () => {
+      await expect(service.getOrderById('not-an-id', customerId, 'student')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      mockLeanFind(null);
+
+      await expect(service.getOrderById(orderId, customerId, 'student')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('checks authorization before ever returning a cached copy of the order', async () => {
+      mockLeanFind({
+        customerId: { toString: () => 'someone-else' },
+        vendorId: { toString: () => vendorId },
+      });
+
+      await expect(service.getOrderById(orderId, customerId, 'student')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(cacheManager.get).not.toHaveBeenCalled();
+    });
+
+    it('strips the delivery code from a cached order when a vendor requests it', async () => {
+      mockLeanFind({
+        customerId: { toString: () => customerId },
+        vendorId: { toString: () => vendorId },
+      });
+      cacheManager.get.mockResolvedValue({ _id: orderId, deliveryCode: '4821', status: 'out_for_delivery' });
+
+      const result = await service.getOrderById(orderId, vendorId, 'vendor');
+
+      expect(result.deliveryCode).toBeUndefined();
+    });
+
+    it('fetches, populates, and caches fresh when nothing is cached, keeping the code for the customer', async () => {
+      mockLeanFind({
+        customerId: { toString: () => customerId },
+        vendorId: { toString: () => vendorId },
+      });
+      cacheManager.get.mockResolvedValue(null);
+      const populated = {
+        _id: orderId,
+        deliveryCode: '4821',
+        toObject: () => ({ _id: orderId, deliveryCode: '4821' }),
+      };
+      mockPopulateFind(populated);
+
+      const result = await service.getOrderById(orderId, customerId, 'student');
+
+      expect(cacheManager.set).toHaveBeenCalledWith(`order:${orderId}`, populated, 300_000);
+      expect(result.deliveryCode).toBe('4821');
+    });
+  });
+
   describe('getOrders', () => {
     function mockFindChain(result: any[]) {
       const exec = jest.fn().mockResolvedValue(result);
@@ -378,6 +501,23 @@ describe('OrdersService', () => {
       await service.getOrders(vendorId, 'vendor', {} as any);
 
       expect(orderModel.find).toHaveBeenCalledWith({ vendorId });
+    });
+
+    it('strips the delivery code from a vendor\'s view of their orders', async () => {
+      mockFindChain([{ _id: 'order-1', status: 'out_for_delivery', deliveryCode: '4821' }]);
+
+      const result = await service.getOrders(vendorId, 'vendor', {} as any);
+
+      expect(result[0].deliveryCode).toBeUndefined();
+      expect(result[0].status).toBe('out_for_delivery');
+    });
+
+    it('keeps the delivery code in a customer\'s view of their own orders', async () => {
+      mockFindChain([{ _id: 'order-1', status: 'out_for_delivery', deliveryCode: '4821' }]);
+
+      const result = await service.getOrders(customerId, 'student', {} as any);
+
+      expect(result[0].deliveryCode).toBe('4821');
     });
 
     it('adds a status filter when provided', async () => {

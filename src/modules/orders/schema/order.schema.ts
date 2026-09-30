@@ -120,6 +120,13 @@ export class Order {
   @Prop({ type: SchemaTypes.ObjectId, ref: 'Payment' })
   paymentId?: Types.ObjectId;
 
+  // Shown only to the customer, never exposed to the vendor - the vendor
+  // must ask the customer for it in person before markDelivered will
+  // accept it, so a delivery can't be claimed without the customer actually
+  // having the order in hand.
+  @Prop({ type: String, required: true })
+  deliveryCode: string;
+
   @Prop() estimatedDeliveryTime?: Date;
   @Prop() actualDeliveryTime?: Date;
 
@@ -144,7 +151,10 @@ export class Order {
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
 
-// Auto-generate order number before saving
+// Fallback only - createOrder() always sets orderNumber itself before the
+// document is constructed, since a required field can't be filled in here:
+// Mongoose runs validation before 'save' hooks, so a pre('save') hook is too
+// late to satisfy `required: true`.
 OrderSchema.pre('save', function (next) {
   if (!this.orderNumber) {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
