@@ -112,27 +112,22 @@ export class OrdersService {
   // -------------------------
   // GET ALL ORDERS (Role-based)
   // -------------------------
+  // Not cached: this list changes constantly (new orders, status updates from
+  // either party) and every mutation happens through a different method, so
+  // caching it correctly would mean remembering to invalidate it from every
+  // one of them. A customer seeing their own order list a few minutes stale
+  // is a worse bug than the DB load saved by caching it.
   async getOrders(userId: string, role: string, query: OrderQueryDto) {
-    const cacheKey = `orders:${role}:${userId}:${JSON.stringify(query)}`;
-    const cached = await this.cacheManager.get<OrderDocument[]>(cacheKey);
-    if (cached) {
-      this.logger.log('💾 Returning cached orders');
-      return cached;
-    }
-
     const filter: any = {};
     if (role === 'student') filter.customerId = userId;
     if (role === 'vendor') filter.vendorId = userId;
     if (query.status) filter.status = query.status;
 
-    const orders = await this.orderModel
+    return this.orderModel
       .find(filter)
       .populate('customerId vendorId items.productId', '-password')
       .sort({ createdAt: -1 })
       .exec();
-
-    await this.cacheManager.set(cacheKey, orders, 300_000);
-    return orders;
   }
 
   // -------------------------

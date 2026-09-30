@@ -42,7 +42,7 @@ describe('OrdersService', () => {
   });
 
   beforeEach(async () => {
-    orderModel = { findById: jest.fn() };
+    orderModel = { findById: jest.fn(), find: jest.fn() };
     cacheManager = { get: jest.fn(), set: jest.fn() };
     notificationsService = { notify: jest.fn().mockResolvedValue({}) };
     paymentsService = { releasePayment: jest.fn(), refundPayment: jest.fn() };
@@ -342,6 +342,50 @@ describe('OrdersService', () => {
       await expect(service.trackOrder(orderId, customerId, 'student')).rejects.toThrow(
         ForbiddenException,
       );
+    });
+  });
+
+  describe('getOrders', () => {
+    function mockFindChain(result: any[]) {
+      const exec = jest.fn().mockResolvedValue(result);
+      const sort = jest.fn().mockReturnValue({ exec });
+      const populate = jest.fn().mockReturnValue({ sort });
+      orderModel.find.mockReturnValue({ populate });
+      return { populate };
+    }
+
+    it('always queries the database fresh, never a cache, so new orders show up immediately', async () => {
+      mockFindChain([{ _id: 'order-1' }]);
+
+      const result = await service.getOrders(customerId, 'student', {} as any);
+
+      expect(result).toEqual([{ _id: 'order-1' }]);
+      expect(cacheManager.get).not.toHaveBeenCalled();
+      expect(cacheManager.set).not.toHaveBeenCalled();
+    });
+
+    it('filters by customerId for a student', async () => {
+      mockFindChain([]);
+
+      await service.getOrders(customerId, 'student', {} as any);
+
+      expect(orderModel.find).toHaveBeenCalledWith({ customerId });
+    });
+
+    it('filters by vendorId for a vendor', async () => {
+      mockFindChain([]);
+
+      await service.getOrders(vendorId, 'vendor', {} as any);
+
+      expect(orderModel.find).toHaveBeenCalledWith({ vendorId });
+    });
+
+    it('adds a status filter when provided', async () => {
+      mockFindChain([]);
+
+      await service.getOrders(customerId, 'student', { status: 'pending' } as any);
+
+      expect(orderModel.find).toHaveBeenCalledWith({ customerId, status: 'pending' });
     });
   });
 });
