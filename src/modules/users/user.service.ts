@@ -28,6 +28,7 @@ import { CreateAddressDto } from "./dto/create-address.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { CreatePaymentMethodDto } from "./dto/create-payment-method.dto";
 import { AdminUserQueryDto } from "./dto/admin-user-query.dto";
+import { CreateAdminDto } from "./dto/create-admin.dto";
 import { MailService } from "../../utils/mail.service";
 import { ConfigService } from "@nestjs/config";
 import * as argon2 from "argon2";
@@ -130,6 +131,30 @@ export class UserService {
 
     this.logger.log(`User created & tokens generated: ${savedUser.email}`);
     return { user: safeUser, ...tokens };
+  }
+
+  // ✅ CREATE ADMIN (admin-only) — the in-app replacement for the
+  // create-admin CLI script: an existing admin sets a temp password for the
+  // new one directly, who changes it after their first login.
+  async createAdmin(dto: CreateAdminDto): Promise<SafeUser> {
+    const email = dto.email.trim().toLowerCase();
+
+    const existingUser = await this.userModel.findOne({ email }).lean();
+    if (existingUser) throw new ConflictException("Email already registered");
+
+    const hashedPassword = await bcrypt.hash(dto.password, this.SALT_ROUNDS);
+
+    const newAdmin = new this.userModel({
+      email,
+      password: hashedPassword,
+      role: "admin",
+      isVerified: true,
+      profile: { firstName: dto.firstName, lastName: dto.lastName },
+    });
+
+    const savedAdmin = await newAdmin.save();
+    this.logger.log(`Admin account created: ${savedAdmin.email}`);
+    return this.excludePassword(savedAdmin);
   }
 
   // ✅ LOGIN

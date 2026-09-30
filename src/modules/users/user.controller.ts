@@ -34,6 +34,7 @@ import { CreateAddressDto } from "./dto/create-address.dto";
 import { UpdateAddressDto } from "./dto/update-address.dto";
 import { CreatePaymentMethodDto } from "./dto/create-payment-method.dto";
 import { AdminUserQueryDto } from "./dto/admin-user-query.dto";
+import { CreateAdminDto } from "./dto/create-admin.dto";
 import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { RefreshTokenGuard } from "src/common/guards/jwt-refresh.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
@@ -380,6 +381,17 @@ async googleCallback(@Req() req, @Res() res: Response) {
   const appUrl = this.configService.get<string>('APP_URL') ?? 'http://localhost:5000';
   res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
 }
+
+  // ✅ ADMIN — create a new admin account with a temp password
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles("admin")
+  @Post("create-admin")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Create a new admin account (Admin only)" })
+  async createAdmin(@Body() dto: CreateAdminDto) {
+    const user = await this.userService.createAdmin(dto);
+    return { success: true, message: "Admin account created successfully", user };
+  }
 
   // ✅ ADMIN — list every customer with order totals
   @UseGuards(AccessTokenGuard, RolesGuard)

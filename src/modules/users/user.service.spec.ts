@@ -1,7 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getModelToken } from "@nestjs/mongoose";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
 import { Types } from "mongoose";
@@ -32,11 +32,18 @@ describe("UserService", () => {
   const mockPaymentMethodId = new Types.ObjectId().toString();
 
   beforeEach(async () => {
-    userModel = {
-      findById: jest.fn(),
-      findByIdAndUpdate: jest.fn(),
-      updateOne: jest.fn(),
-    };
+    userModel = Object.assign(
+      jest.fn().mockImplementation((doc: any) => ({
+        ...doc,
+        save: jest.fn().mockResolvedValue({ ...doc, toObject: () => ({ ...doc }) }),
+      })),
+      {
+        findById: jest.fn(),
+        findByIdAndUpdate: jest.fn(),
+        updateOne: jest.fn(),
+        findOne: jest.fn(),
+      },
+    );
     const orderModel = {
       aggregate: jest.fn().mockResolvedValue([]),
     };
@@ -310,6 +317,39 @@ describe("UserService", () => {
       expect(paymentMethods).toHaveLength(0);
       expect(save).toHaveBeenCalled();
       expect(result).toBe(paymentMethods);
+    });
+  });
+
+  describe("createAdmin", () => {
+    const dto = {
+      email: "New.Admin@Test.com",
+      password: "StrongPass1!",
+      firstName: "New",
+      lastName: "Admin",
+    };
+
+    it("throws ConflictException when the email is already registered", async () => {
+      userModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ email: "new.admin@test.com" }) });
+
+      await expect(service.createAdmin(dto)).rejects.toThrow(ConflictException);
+      expect(userModel).not.toHaveBeenCalled();
+    });
+
+    it("creates the account with role admin and returns it without the password", async () => {
+      userModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+
+      const result = await service.createAdmin(dto);
+
+      expect(userModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: "new.admin@test.com",
+          role: "admin",
+          isVerified: true,
+          profile: { firstName: "New", lastName: "Admin" },
+        }),
+      );
+      expect((result as any).password).toBeUndefined();
+      expect((result as any).role).toBe("admin");
     });
   });
 });
