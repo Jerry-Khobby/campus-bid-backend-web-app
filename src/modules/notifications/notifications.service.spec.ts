@@ -152,7 +152,13 @@ describe('NotificationsService', () => {
     it('throws NotFoundException when the notification does not exist', async () => {
       notificationModel.findById.mockResolvedValue(null);
 
-      await expect(service.markAsRead('missing-id')).rejects.toThrow(NotFoundException);
+      await expect(service.markAsRead('missing-id', userId)).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException when the notification belongs to another user', async () => {
+      notificationModel.findById.mockResolvedValue({ userId: { toString: () => 'someone-else' } });
+
+      await expect(service.markAsRead('id-1', userId)).rejects.toThrow(ForbiddenException);
     });
 
     it('marks an unread notification as read and decrements the unread count', async () => {
@@ -161,7 +167,7 @@ describe('NotificationsService', () => {
       notificationModel.findById.mockResolvedValue(notif);
       cacheManager.get.mockResolvedValue(1);
 
-      await service.markAsRead('id-1');
+      await service.markAsRead('id-1', userId);
 
       expect(notif.isRead).toBe(true);
       expect(save).toHaveBeenCalled();
