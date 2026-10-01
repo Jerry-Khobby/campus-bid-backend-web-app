@@ -1,8 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsMongoId, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsMongoId, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { OrderItemDto } from './subdocuments/order-item.dto';
-import { PricingDto } from './subdocuments/pricing.dto';
 import { DeliveryAddressDto } from './subdocuments/delivery-address.dto';
 
 export class CreateOrderDto {
@@ -13,14 +12,10 @@ export class CreateOrderDto {
 
   @ApiProperty({ type: [OrderItemDto] })
   @IsArray()
+  @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   items: OrderItemDto[];
-
-  @ApiProperty({ type: PricingDto })
-  @ValidateNested()
-  @Type(() => PricingDto)
-  pricing: PricingDto;
 
   @ApiProperty({ type: DeliveryAddressDto })
   @ValidateNested()

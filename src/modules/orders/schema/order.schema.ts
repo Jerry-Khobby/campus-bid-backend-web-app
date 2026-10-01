@@ -134,6 +134,16 @@ export class Order {
   @Prop({ type: String })
   deliveryCode?: string;
 
+  // Every markDelivered attempt counts, so guessing stops at
+  // MAX_DELIVERY_CODE_ATTEMPTS even if the requests arrive in parallel.
+  @Prop({ type: Number, default: 0 })
+  deliveryCodeAttempts?: number;
+
+  // True when createOrder took the units out of product stock, so a cancel
+  // knows it has units to give back. Older orders never reserved any.
+  @Prop({ type: Boolean, default: false })
+  stockReserved?: boolean;
+
   @Prop() estimatedDeliveryTime?: Date;
   @Prop() actualDeliveryTime?: Date;
 

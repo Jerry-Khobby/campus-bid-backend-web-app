@@ -1,38 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsMongoId, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsInt, IsMongoId, Min } from 'class-validator';
 
+// Only what the customer chooses. Name, image and price are snapshotted from
+// the product catalogue on the server so the client can't set its own price.
 export class OrderItemDto {
   @ApiProperty()
   @IsMongoId()
   productId: string;
 
   @ApiProperty()
-  @IsString()
-  @IsNotEmpty()
-  productName: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  productImage?: string;
-
-  @ApiProperty()
-  @IsNumber()
+  @IsInt()
   @Min(1)
   quantity: number;
-
-  @ApiProperty()
-  @IsNumber()
-  @Min(0)
-  price: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  isFlashSale?: boolean = false;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsMongoId()
-  flashSaleId?: string;
 }

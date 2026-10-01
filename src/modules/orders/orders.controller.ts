@@ -15,6 +15,7 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -29,6 +30,7 @@ import { MarkDeliveredDto } from './dto/mark-delivered.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
+import { SENSITIVE_THROTTLE } from 'src/common/throttle/throttle.config';
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -65,8 +67,8 @@ export class OrdersController {
   @Roles('vendor')
   @Patch(':id/update')
   @ApiBearerAuth()
-  async updateOrder(@Param('id') id: string, @Body() dto: UpdateOrderDto) {
-    const data = await this.ordersService.updateOrder(id, dto);
+  async updateOrder(@Request() req, @Param('id') id: string, @Body() dto: UpdateOrderDto) {
+    const data = await this.ordersService.updateOrder(id, req.user.sub, dto);
     return { success: true, message: 'Order updated successfully', data };
   }
 
@@ -122,6 +124,7 @@ export class OrdersController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles('vendor')
   @Patch(':id/mark-delivered')
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   async markDelivered(@Request() req, @Param('id') id: string, @Body() dto: MarkDeliveredDto) {
     const data = await this.ordersService.markDelivered(id, req.user.sub, dto.deliveryCode);
@@ -131,6 +134,7 @@ export class OrdersController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles('student')
   @Post(':id/confirm-delivery')
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   async confirmDelivery(
     @Request() req,

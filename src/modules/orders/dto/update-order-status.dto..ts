@@ -1,10 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { OrderStatus } from './order-status.enum';
+import { VENDOR_PROGRESS_STATUSES } from '../order-state-machine';
 
 export class UpdateOrderStatusDto {
-  @ApiProperty({ enum: OrderStatus })
-  @IsEnum(OrderStatus)
+  @ApiProperty({ enum: VENDOR_PROGRESS_STATUSES })
+  @IsIn(VENDOR_PROGRESS_STATUSES)
   status: OrderStatus;
 
   @ApiPropertyOptional()

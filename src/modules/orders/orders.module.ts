@@ -13,6 +13,7 @@ import { User,UserSchema } from "../users/schema/user.schema";
 import { Vendor,VendorSchema } from "../vendors/schema/vendor.schema";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { PaymentsModule } from "../payments/payment.module";
+import { Payment, PaymentSchema } from "../payments/schema/payment.schema";
 
 @Module({
 
@@ -22,6 +23,7 @@ import { PaymentsModule } from "../payments/payment.module";
         {name:Product.name,schema:ProductSchema},
         {name:User.name,schema:UserSchema},
         {name:Vendor.name,schema:VendorSchema},
+        { name: Payment.name, schema: PaymentSchema },
 
       ]),
       CacheModule.register(),
