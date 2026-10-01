@@ -40,6 +40,8 @@ import { ProductsService } from "../products/products.service";
 import { FlashSaleService } from "../flash-sales/flash-sale.service";
 import { FlashSaleStatus } from "../flash-sales/dto/enums";
 import { PayoutsService } from "../payments/payouts.service";
+import { getAccountStatusCacheKey } from "../../common/guards/account-status";
+import { isPasswordCorrect } from "../users/password-check";
 
 interface CacheVendor {
   id: string;
@@ -61,6 +63,19 @@ export interface SafeVendor {
   createdAt?: Date;
   updatedAt?: Date;
 }
+
+const FORGOT_PASSWORD_RESPONSE = {
+  success: true,
+  message: "If a vendor account exists for this email, a password reset link has been sent",
+};
+
+const INVALID_CREDENTIALS_MESSAGE = "Invalid email or password";
+// isActive:false covers both a new vendor awaiting approval and a suspended one (see docs/vendors.md).
+const INACTIVE_VENDOR_MESSAGE =
+  "This vendor account is not active. New accounts need admin approval before signing in; suspended accounts stay locked until reactivated.";
+const RESET_TOKEN_BYTES = 32;
+const RESET_TOKEN_TTL_MS = 15 * 60 * 1000;
+const VENDOR_CACHE_TTL_MS = 60 * 60 * 1000;
 
 @Injectable()
 export class VendorService {
@@ -87,7 +102,7 @@ export class VendorService {
   async createVendor(
     dto: CreateVendorDto,
     logo?: Express.Multer.File
-  ): Promise<{ vendor: SafeVendor; accessToken: string; refreshToken: string }> {
+  ): Promise<{ vendor: SafeVendor }> {
     const email = dto.email.trim().toLowerCase();
 
     const existing = await this.vendorModel.findOne({ email }).lean();
@@ -128,13 +143,11 @@ export class VendorService {
       id: vendorId,
       email: saved.email,
     };
-    await this.cacheManager.set(`vendor:${email}`, cacheVendor, 3_600_000);
+    await this.cacheManager.set(`vendor:${email}`, cacheVendor, VENDOR_CACHE_TTL_MS);
 
-    const { accessToken, refreshToken } = await this.getTokens(vendorId, saved.email,vendor.role);
-    await this.updateRefreshToken(vendorId, refreshToken);
-
+    // No tokens yet: a new vendor starts inactive and can only sign in once an admin approves it.
     this.logger.log(`Vendor created: ${email}`);
-    return { vendor: this.excludePassword(saved), accessToken, refreshToken };
+    return { vendor: this.excludePassword(saved) };
   }
 
   // -----------------------
@@ -145,24 +158,24 @@ export class VendorService {
   ): Promise<{ vendor: SafeVendor; accessToken: string; refreshToken: string }> {
     const email = dto.email.trim().toLowerCase();
     const vendor = await this.vendorModel.findOne({ email });
-    if (!vendor) throw new NotFoundException("Invalid email or password");
 
-  if (!vendor.password) {
-    throw new UnauthorizedException(
-      `This account uses ${vendor.authProvider} OAuth. Please login via Google.`
-    );
-  }
-    const valid = await bcrypt.compare(dto.password, vendor.password);
-    if (!valid) throw new UnauthorizedException("Invalid email or password");
+    // One message for unknown emails, Google-only accounts and wrong passwords, so login can't enumerate vendors.
+    const valid = await isPasswordCorrect(vendor?.password, dto.password, this.SALT_ROUNDS);
+    if (!vendor || !valid) throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
+    this.assertVendorActive(vendor);
 
     const vendorId = (vendor._id as Types.ObjectId).toString();
     const { accessToken, refreshToken } = await this.getTokens(vendorId, vendor.email,vendor.role);
     await this.updateRefreshToken(vendorId, refreshToken);
 
-    await this.cacheManager.set(`vendor:${email}`, { id: vendorId, email }, 3_600_000);
+    await this.cacheManager.set(`vendor:${email}`, { id: vendorId, email }, VENDOR_CACHE_TTL_MS);
 
     this.logger.log(`Vendor logged in: ${email}`);
     return { vendor: this.excludePassword(vendor), accessToken, refreshToken };
+  }
+
+  private assertVendorActive(vendor: VendorDocument): void {
+    if (!vendor.isActive) throw new ForbiddenException(INACTIVE_VENDOR_MESSAGE);
   }
 
   // -----------------------
@@ -292,6 +305,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     if (!valid) throw new UnauthorizedException("Old password is incorrect");
 
     vendor.password = await bcrypt.hash(dto.newPassword, this.SALT_ROUNDS);
+    this.revokeRefreshToken(vendor);
     await vendor.save();
 
     this.logger.log(`Vendor password changed: ${vendor.email}`);
@@ -301,16 +315,26 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
   // -----------------------
   // FORGOT PASSWORD
   // -----------------------
+  // Same response whether or not the account exists, so this endpoint can't be used to enumerate emails.
   async forgotPassword(dto: ForgotPasswordDto) {
-    const vendor = await this.vendorModel.findOne({ email: dto.email.toLowerCase() });
-    if (!vendor) throw new NotFoundException("Vendor not found");
+    const vendor = await this.vendorModel.findOne({ email: dto.email.trim().toLowerCase() });
+    if (vendor) await this.startPasswordReset(vendor);
 
-    const resetToken = randomBytes(32).toString("hex");
+    return FORGOT_PASSWORD_RESPONSE;
+  }
+
+  private async startPasswordReset(vendor: VendorDocument): Promise<void> {
+    const resetToken = randomBytes(RESET_TOKEN_BYTES).toString("hex");
     const vendorId = (vendor._id as Types.ObjectId).toString();
+    await this.cacheManager.set(`vendor-reset:${resetToken}`, vendorId, RESET_TOKEN_TTL_MS);
 
-    await this.cacheManager.set(`vendor-reset:${resetToken}`, vendorId, 900_000);
+    // Not awaited: waiting on the mail server would make known emails measurably slower than unknown ones.
+    void this.sendResetEmail(vendor, resetToken);
+  }
 
-    const resetLink = `https://your-vendor-dashboard.com/reset-password?token=${resetToken}`;
+  private async sendResetEmail(vendor: VendorDocument, resetToken: string): Promise<void> {
+    const vendorAppUrl = this.configService.get<string>("VENDOR_APP_URL");
+    const resetLink = `${vendorAppUrl}/vendor/reset-password?token=${resetToken}`;
     const html = `
       <p>Hello ${vendor.profile?.businessName || "Vendor"},</p>
       <p>Click below to reset your password:</p>
@@ -320,13 +344,11 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
 
     try {
       await this.mailService.sendEmail(vendor.email, "Reset your password", html);
+      this.logger.log(`Vendor reset link sent: ${vendor.email}`);
     } catch (err) {
-      this.logger.error(`Failed to send vendor reset email: ${err.message}`);
-      throw new InternalServerErrorException("Email failed to send");
+      // The requester already has the generic reply; the unused token simply expires.
+      this.logger.error(`Vendor reset email to ${vendor.email} failed: ${err.message}`, err.stack);
     }
-
-    this.logger.log(`Vendor reset link sent: ${vendor.email}`);
-    return { success: true, message: "Password reset link sent", resetToken };
   }
 
   // -----------------------
@@ -340,12 +362,18 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
     if (!vendor) throw new NotFoundException("Vendor not found");
 
     vendor.password = await bcrypt.hash(dto.newPassword, this.SALT_ROUNDS);
+    this.revokeRefreshToken(vendor);
     await vendor.save();
 
     await this.cacheManager.del(`vendor-reset:${dto.token}`);
     this.logger.log(`Vendor password reset: ${vendor.email}`);
 
     return { success: true, message: "Password reset successfully" };
+  }
+
+  // A new password must end every existing session, including any an attacker holds.
+  private revokeRefreshToken(vendor: VendorDocument): void {
+    vendor.refreshToken = undefined;
   }
 
   // -----------------------
@@ -385,6 +413,7 @@ async updateProfile(id: string, dto: UpdateProfileDto): Promise<SafeVendor> {
   async refreshTokens(id: string, refreshToken: string) {
     const vendor = await this.vendorModel.findById(id);
     if (!vendor || !vendor.refreshToken) throw new ForbiddenException("Access Denied");
+    this.assertVendorActive(vendor);
 
     const matches = await argon2.verify(vendor.refreshToken, refreshToken);
     if (!matches) throw new ForbiddenException("Access Denied");
@@ -426,6 +455,8 @@ async handleGoogleLogin(googleUser: {
       "No vendor account found for this email. Sign up below with this email to create one - you'll need admin approval before you can start selling."
     );
   }
+
+  this.assertVendorActive(vendor);
 
   if (!vendor.oauth?.googleId) {
     vendor.oauth = { googleId: googleUser.googleId };
@@ -552,6 +583,7 @@ async handleGoogleLogin(googleUser: {
     const vendor = await this.vendorModel.findByIdAndUpdate(id, { isActive }, { new: true });
     if (!vendor) throw new NotFoundException("Vendor not found");
 
+    await this.cacheManager.del(getAccountStatusCacheKey(vendor.role, id));
     return this.excludePassword(vendor);
   }
 

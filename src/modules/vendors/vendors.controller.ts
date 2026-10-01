@@ -11,6 +11,7 @@ import {
   UseGuards,
   Req,
   Res,
+  NotFoundException,
 } from "@nestjs/common";
 import type { Response } from "express";
 import { ConfigService } from "@nestjs/config";
@@ -40,6 +41,9 @@ import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
 import {FileInterceptor} from "@nestjs/platform-express";
 import { UploadedFile,UseInterceptors } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { SENSITIVE_THROTTLE } from "src/common/throttle/throttle.config";
+import { IMAGE_UPLOAD_OPTIONS } from "src/common/uploads/image-upload.options";
 import { AuthGuard } from "@nestjs/passport";
 import { CloudinaryService } from "../uploads/cloudinary.service";
 import { FilterProductDto } from "../products/dto/filter-product.dto";
@@ -65,7 +69,8 @@ export class VendorController {
 
   // ✅ REGISTER (Public)
   @Post("register")
-    @UseInterceptors(FileInterceptor('logo'))
+  @Throttle(SENSITIVE_THROTTLE)
+  @UseInterceptors(FileInterceptor('logo', IMAGE_UPLOAD_OPTIONS))
   @ApiOperation({ summary: "Register a new vendor account" })
   @ApiResponse({ status: 201, description: "Vendor registered successfully" })
   async register(
@@ -74,13 +79,14 @@ export class VendorController {
     const result = await this.vendorService.createVendor(dto,logo);
     return {
       success: true,
-      message: "Vendor registered successfully",
+      message: "Vendor registered successfully. An admin must approve the account before you can sign in.",
       ...result,
     };
   }
 
   // ✅ LOGIN (Public)
   @Post("login")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiOperation({ summary: "Authenticate vendor and return tokens" })
   @ApiResponse({ status: 200, description: "Login successful" })
   async login(@Body() dto: VendorLoginDto) {
@@ -125,7 +131,7 @@ export class VendorController {
   // ✅ UPDATE LOGO (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
-  @UseInterceptors(FileInterceptor("logo"))
+  @UseInterceptors(FileInterceptor("logo", IMAGE_UPLOAD_OPTIONS))
   @Post("profile/logo")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Upload/replace vendor logo" })
@@ -138,7 +144,7 @@ export class VendorController {
   // ✅ UPDATE BANNER (Vendor only)
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
-  @UseInterceptors(FileInterceptor("banner"))
+  @UseInterceptors(FileInterceptor("banner", IMAGE_UPLOAD_OPTIONS))
   @Post("profile/banner")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Upload/replace vendor banner" })
@@ -185,6 +191,7 @@ export class VendorController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("vendor")
   @Post("change-password")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Change vendor account password" })
   async changePassword(@Request() req, @Body() dto: ChangePasswordDto) {
@@ -193,6 +200,7 @@ export class VendorController {
 
   // ✅ FORGOT PASSWORD (Public)
   @Post("forgot-password")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiOperation({ summary: "Send password reset link via email" })
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     return await this.vendorService.forgotPassword(dto);
@@ -200,6 +208,7 @@ export class VendorController {
 
   // ✅ RESET PASSWORD (Public)
   @Post("reset-password")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiOperation({ summary: "Reset vendor password using token" })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return await this.vendorService.resetPassword(dto);
@@ -220,6 +229,7 @@ export class VendorController {
   @UseGuards(RefreshTokenGuard, RolesGuard)
   @Roles("vendor")
   @Post("refresh")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Refresh access and refresh tokens" })
   async refreshTokens(@Req() req) {
@@ -397,7 +407,9 @@ export class VendorController {
       res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Google login failed';
-      const email = req.user?.email ? `&email=${encodeURIComponent(req.user.email)}` : '';
+      // Only an unknown email is sent on to the sign-up form; a pending or suspended vendor stays on sign-in.
+      const isUnregistered = error instanceof NotFoundException && req.user?.email;
+      const email = isUnregistered ? `&email=${encodeURIComponent(req.user.email)}` : '';
       res.redirect(`${appUrl}/auth/google/callback?error=${encodeURIComponent(message)}${email}`);
     }
   }

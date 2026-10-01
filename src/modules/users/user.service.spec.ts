@@ -1,10 +1,17 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getModelToken } from "@nestjs/mongoose";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
-import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
 import { Types } from "mongoose";
+import * as bcrypt from "bcrypt";
 
 import { UserService } from "./user.service";
 import { User } from "./schema/user.schema";
@@ -23,9 +30,17 @@ function toSubdocArray(items: any[]) {
   return arr;
 }
 
+const APP_URLS: Record<string, string> = {
+  APP_URL: "http://customer.test",
+  ADMIN_APP_URL: "http://admin.test",
+};
+
 describe("UserService", () => {
   let service: UserService;
   let userModel: any;
+  let mailService: any;
+  let jwtService: any;
+  let cacheManager: any;
 
   const mockUserId = new Types.ObjectId().toString();
   const mockAddressId = new Types.ObjectId().toString();
@@ -56,12 +71,15 @@ describe("UserService", () => {
         { provide: CACHE_MANAGER, useValue: { get: jest.fn(), set: jest.fn(), del: jest.fn() } },
         { provide: JwtService, useValue: { signAsync: jest.fn() } },
         { provide: MailService, useValue: { sendEmail: jest.fn() } },
-        { provide: ConfigService, useValue: { get: jest.fn() } },
+        { provide: ConfigService, useValue: { get: jest.fn((key: string) => APP_URLS[key]) } },
         { provide: CloudinaryService, useValue: { uploadImage: jest.fn() } },
       ],
     }).compile();
 
     service = module.get<UserService>(UserService);
+    mailService = module.get(MailService);
+    jwtService = module.get(JwtService);
+    cacheManager = module.get(CACHE_MANAGER);
   });
 
   describe("updateUser", () => {
@@ -350,6 +368,216 @@ describe("UserService", () => {
       );
       expect((result as any).password).toBeUndefined();
       expect((result as any).role).toBe("admin");
+    });
+  });
+
+  describe("forgotPassword", () => {
+    const sentEmailBody = () => mailService.sendEmail.mock.calls[0][2];
+
+    it("never returns the reset token in the response", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, role: "student", profile: {} });
+
+      const result = await service.forgotPassword({ email: "student@test.com" });
+
+      expect(result).not.toHaveProperty("resetToken");
+    });
+
+    it("returns the same response for an unknown email without sending mail", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, role: "student", profile: {} });
+      const knownEmailResult = await service.forgotPassword({ email: "student@test.com" });
+      mailService.sendEmail.mockClear();
+      userModel.findOne.mockResolvedValue(null);
+
+      const unknownEmailResult = await service.forgotPassword({ email: "nobody@test.com" });
+
+      expect(unknownEmailResult).toEqual(knownEmailResult);
+      expect(mailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it("links students to the customer app reset page", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, role: "student", profile: {} });
+
+      await service.forgotPassword({ email: "student@test.com" });
+
+      expect(sentEmailBody()).toContain("http://customer.test/reset-password?token=");
+    });
+
+    it("links admins to the admin app reset page", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, role: "admin", profile: {} });
+
+      await service.forgotPassword({ email: "admin@test.com" });
+
+      expect(sentEmailBody()).toContain("http://admin.test/admin/reset-password?token=");
+    });
+  });
+
+  describe("forgotPassword delivery", () => {
+    it("responds without waiting for the email to be sent", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, role: "student", profile: {} });
+      mailService.sendEmail.mockReturnValue(new Promise(() => undefined));
+
+      await expect(service.forgotPassword({ email: "student@test.com" })).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+    });
+
+    it("still returns the generic response when the email fails to send", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, role: "student", profile: {} });
+      mailService.sendEmail.mockRejectedValue(new Error("SMTP down"));
+
+      await expect(service.forgotPassword({ email: "student@test.com" })).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+    });
+  });
+
+  describe("loginUser", () => {
+    const PASSWORD = "StrongPass1!";
+    const TEST_SALT_ROUNDS = 4;
+    let passwordHash: string;
+
+    const buildLoginUser = (overrides: Record<string, any> = {}) => {
+      const doc = {
+        _id: mockUserId,
+        email: "student@test.com",
+        role: "student",
+        password: passwordHash,
+        refreshToken: "stored-refresh-hash",
+        isActive: true,
+        ...overrides,
+      };
+      return { ...doc, toObject: () => ({ ...doc }) };
+    };
+
+    beforeAll(async () => {
+      passwordHash = await bcrypt.hash(PASSWORD, TEST_SALT_ROUNDS);
+    });
+
+    beforeEach(() => {
+      jwtService.signAsync.mockResolvedValue("signed-token");
+    });
+
+    it("rejects an unknown email with the generic 401", async () => {
+      userModel.findOne.mockResolvedValue(null);
+
+      await expect(service.loginUser({ email: "nobody@test.com", password: PASSWORD })).rejects.toThrow(
+        new UnauthorizedException("Invalid email or password"),
+      );
+    });
+
+    it("rejects a wrong password with the same generic 401", async () => {
+      userModel.findOne.mockResolvedValue(buildLoginUser());
+
+      await expect(service.loginUser({ email: "student@test.com", password: "Wrong1!pass" })).rejects.toThrow(
+        new UnauthorizedException("Invalid email or password"),
+      );
+    });
+
+    it("rejects a Google-only account with the same generic 401", async () => {
+      userModel.findOne.mockResolvedValue(buildLoginUser({ password: undefined }));
+
+      await expect(service.loginUser({ email: "student@test.com", password: PASSWORD })).rejects.toThrow(
+        new UnauthorizedException("Invalid email or password"),
+      );
+    });
+
+    it("rejects a suspended account that knows its password", async () => {
+      userModel.findOne.mockResolvedValue(buildLoginUser({ isActive: false }));
+
+      await expect(service.loginUser({ email: "student@test.com", password: PASSWORD })).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it("never returns the refresh-token hash or password in the user object", async () => {
+      userModel.findOne.mockResolvedValue(buildLoginUser());
+
+      const result = await service.loginUser({ email: "student@test.com", password: PASSWORD });
+
+      expect(Object.keys(result.user)).toEqual(expect.not.arrayContaining(["password", "refreshToken"]));
+    });
+  });
+
+  describe("createUser", () => {
+    beforeEach(() => {
+      userModel.mockImplementation((doc: any) => ({
+        ...doc,
+        save: jest.fn().mockResolvedValue({
+          ...doc,
+          _id: mockUserId,
+          toObject: () => ({ ...doc, refreshToken: null }),
+        }),
+      }));
+      userModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+      jwtService.signAsync.mockResolvedValue("signed-token");
+    });
+
+    it("never persists a client-supplied refresh token", async () => {
+      const dto: any = { email: "new@test.com", password: "StrongPass1!", refreshToken: "client-value" };
+
+      await service.createUser(dto);
+
+      expect(userModel.mock.calls[0][0]).not.toHaveProperty("refreshToken");
+    });
+
+    it("never returns the refresh-token field in the user object", async () => {
+      const result = await service.createUser({ email: "new@test.com", password: "StrongPass1!" });
+
+      expect(result.user).not.toHaveProperty("refreshToken");
+    });
+  });
+
+  describe("password changes revoke sessions", () => {
+    const buildUserWithSession = (password?: string) => ({
+      _id: mockUserId,
+      email: "student@test.com",
+      password,
+      refreshToken: "stored-refresh-hash",
+      save: jest.fn(),
+    });
+
+    it("clears the stored refresh token on password reset", async () => {
+      const user = buildUserWithSession();
+      cacheManager.get.mockResolvedValue(mockUserId);
+      userModel.findById.mockResolvedValue(user);
+
+      await service.resetPassword({ token: "reset-token", newPassword: "NewStrong1!" });
+
+      expect(user.refreshToken).toBeUndefined();
+    });
+
+    it("clears the stored refresh token on password change", async () => {
+      const user = buildUserWithSession(await bcrypt.hash("OldStrong1!", 4));
+      userModel.findById.mockResolvedValue(user);
+
+      await service.changePassword(mockUserId, { oldPassword: "OldStrong1!", newPassword: "NewStrong1!" });
+
+      expect(user.refreshToken).toBeUndefined();
+    });
+  });
+
+  describe("suspended accounts", () => {
+    it("cannot refresh tokens", async () => {
+      userModel.findById.mockResolvedValue({ _id: mockUserId, refreshToken: "hash", isActive: false });
+
+      await expect(service.refreshTokens(mockUserId, "refresh-token")).rejects.toThrow(ForbiddenException);
+    });
+
+    it("cannot sign in with Google", async () => {
+      userModel.findOne.mockResolvedValue({ _id: mockUserId, email: "student@test.com", isActive: false });
+
+      await expect(
+        service.handleGoogleLogin({ googleId: "g-1", email: "student@test.com", firstName: "A", lastName: "B" }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it("lose live access-token sessions as soon as they are suspended", async () => {
+      const suspended = { _id: mockUserId, role: "student", isActive: false, toObject: () => ({}) };
+      userModel.findByIdAndUpdate.mockResolvedValue(suspended);
+
+      await service.suspendUser(mockUserId);
+
+      expect(cacheManager.del).toHaveBeenCalledWith(`account-active:User:${mockUserId}`);
     });
   });
 });
