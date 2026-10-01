@@ -33,6 +33,9 @@ async function bootstrap() {
     origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    // Browsers hide non-safelisted headers from cross-origin code; the frontends
+    // read Retry-After to tell a rate-limited user how long to wait.
+    exposedHeaders: ['Retry-After'],
   });
 
   app.useGlobalPipes(new ValidationPipe({
