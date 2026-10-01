@@ -9,6 +9,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { CacheModule } from '@nestjs/cache-manager';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ProductsModule } from '../products/products.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
     CacheModule.register(),
     NotificationsModule,
+    ProductsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
