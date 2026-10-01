@@ -12,6 +12,7 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model, Types } from "mongoose";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
 import type { Cache } from "cache-manager";
+import { randomUUID } from "crypto";
 
 import { CreateProductDto } from "./dto/create-product.dto";
 import { UpdateProductDto } from "./dto/update-product.dto";
@@ -29,6 +30,9 @@ const DEFAULT_RADIUS_KM = 5;
 const METERS_PER_KILOMETER = 1000;
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 10;
+const PRODUCT_CACHE_TTL_MS = 60_000;
+const PRODUCT_LIST_VERSION_KEY = "products:list-version";
+const PRODUCT_LIST_VERSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface SafeProduct {
   _id: string;
@@ -176,7 +180,7 @@ export class ProductsService {
     if (!product) throw new NotFoundException("Product not found");
 
     const safe = this.toSafeProduct(product);
-    await this.cacheManager.set(cacheKey, safe, 60_000);
+    await this.cacheManager.set(cacheKey, safe, PRODUCT_CACHE_TTL_MS);
 
     return safe;
   }
@@ -199,8 +203,8 @@ export class ProductsService {
     if (typeof filter.isAvailable !== "undefined") query.isAvailable = filter.isAvailable;
     if (typeof filter.isFlashSale !== "undefined") query.isFlashSale = filter.isFlashSale;
 
-    // cache key
-    const cacheKey = `products:${JSON.stringify({ q: query, page, limit })}`;
+    const listVersion = await this.getProductListVersion();
+    const cacheKey = `products:${listVersion}:${JSON.stringify({ q: query, page, limit })}`;
     const cached = await this.cacheManager.get<{ items: SafeProduct[]; total: number }>(cacheKey);
     if (cached) {
       this.logger.log(`Products served from cache (${cacheKey})`);
@@ -216,7 +220,7 @@ export class ProductsService {
     const items = rawItems.map((r) =>
       this.toSafeProductFromObject(r, vendorNameById.get(r.vendorId?.toString())),
     );
-    await this.cacheManager.set(cacheKey, { items, total }, 60_000);
+    await this.cacheManager.set(cacheKey, { items, total }, PRODUCT_CACHE_TTL_MS);
 
     return { items, total, page, limit };
   }
@@ -351,14 +355,7 @@ export class ProductsService {
   // ADD PRODUCT IMAGES (owner-only)
   // -----------------------
   async addProductImages(productId: string, actorId: string, urls: string[]): Promise<string[]> {
-    if (!Types.ObjectId.isValid(productId)) throw new BadRequestException("Invalid productId");
-
-    const product = await this.productModel.findById(productId);
-    if (!product) throw new NotFoundException("Product not found");
-
-    if (!product.vendorId || product.vendorId.toString() !== actorId) {
-      throw new ForbiddenException("Not allowed to update this product");
-    }
+    const product = await this.getOwnedProduct(productId, actorId);
 
     product.images.push(...urls);
     await product.save();
@@ -367,6 +364,23 @@ export class ProductsService {
     await this.cacheManager.del(`product:${productId}`);
 
     return product.images;
+  }
+
+  // Lets callers reject a request before doing expensive work (e.g. uploading images).
+  async assertVendorOwnsProduct(productId: string, actorId: string): Promise<void> {
+    await this.getOwnedProduct(productId, actorId);
+  }
+
+  private async getOwnedProduct(productId: string, actorId: string): Promise<ProductDocument> {
+    if (!Types.ObjectId.isValid(productId)) throw new BadRequestException("Invalid productId");
+
+    const product = await this.productModel.findById(productId);
+    if (!product) throw new NotFoundException("Product not found");
+
+    if (!product.vendorId || product.vendorId.toString() !== actorId) {
+      throw new ForbiddenException("Not allowed to update this product");
+    }
+    return product;
   }
 
   // -----------------------
@@ -462,20 +476,22 @@ export class ProductsService {
     } as SafeProduct;
   }
 
-  private async invalidateProductListCaches() {
-    try {
-      const store = (this.cacheManager as any).store;
-      if (store && typeof store.keys === "function") {
-        // pattern depends on store implementation. For redis-store, keys can accept pattern.
-        const keys = await store.keys?.("products:*");
-        if (Array.isArray(keys) && keys.length) {
-          await Promise.all(keys.map((k: string) => this.cacheManager.del(k)));
-        }
-      }
-    } catch (err) {
-      // Non-fatal: log and continue
-      this.logger.debug("Could not invalidate product-list caches by pattern");
-    }
+  // Keyv stores cannot delete by pattern, so list keys embed a version token.
+  // Rotating the token makes every cached list unreachable at once; the orphaned
+  // entries expire on their own TTL.
+  private async invalidateProductListCaches(): Promise<void> {
+    await this.rotateProductListVersion();
+  }
+
+  private async getProductListVersion(): Promise<string> {
+    const version = await this.cacheManager.get<string>(PRODUCT_LIST_VERSION_KEY);
+    return version ?? this.rotateProductListVersion();
+  }
+
+  private async rotateProductListVersion(): Promise<string> {
+    const version = randomUUID();
+    await this.cacheManager.set(PRODUCT_LIST_VERSION_KEY, version, PRODUCT_LIST_VERSION_TTL_MS);
+    return version;
   }
 }
 
