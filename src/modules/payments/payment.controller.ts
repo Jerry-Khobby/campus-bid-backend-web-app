@@ -12,11 +12,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PaymentsService } from './payment.service';
+import { PayoutsService } from './payouts.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { SubmitMomoOtpDto } from './dto/submit-momo-otp.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
+import { RejectPayoutDto } from './dto/reject-payout.dto';
 import { PaymentQueryDto } from './dto/payment-query.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
@@ -27,7 +29,10 @@ import { Roles } from 'src/common/decorators/roles.decorator';
 @UseGuards(AccessTokenGuard, RolesGuard)
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly payoutsService: PayoutsService,
+  ) {}
 
   // ----------------------------
   // INITIALIZE PAYMENT (student)
@@ -69,13 +74,43 @@ export class PaymentsController {
   }
 
   // ----------------------------
+  // LIST PAYOUT REQUESTS (admin)
+  // ----------------------------
+  @Roles('admin')
+  @Get('payouts')
+  @ApiOperation({ summary: 'List vendor payout requests, optionally filtered by status (admin)' })
+  async listPayouts(@Query('status') status?: string) {
+    return this.payoutsService.listAllPayouts(status);
+  }
+
+  // ----------------------------
+  // APPROVE PAYOUT (admin) - sends the real Paystack transfer
+  // ----------------------------
+  @Roles('admin')
+  @Patch('payouts/:id/approve')
+  @ApiOperation({ summary: 'Approve a payout request and send the mobile money transfer (admin)' })
+  async approvePayout(@Param('id') id: string, @Req() req) {
+    return this.payoutsService.approvePayout(id, req.user.sub);
+  }
+
+  // ----------------------------
+  // REJECT PAYOUT (admin)
+  // ----------------------------
+  @Roles('admin')
+  @Patch('payouts/:id/reject')
+  @ApiOperation({ summary: 'Reject a payout request without sending a transfer (admin)' })
+  async rejectPayout(@Param('id') id: string, @Body() dto: RejectPayoutDto, @Req() req) {
+    return this.payoutsService.rejectPayout(id, req.user.sub, dto.reason);
+  }
+
+  // ----------------------------
   // GET ONE (admin/student/vendor)
   // ----------------------------
   @Roles('admin', 'student', 'vendor')
   @Get(':id')
-  @ApiOperation({ summary: 'Get a payment by ID' })
-  async findOne(@Param('id') id: string) {
-    return this.paymentsService.findById(id);
+  @ApiOperation({ summary: 'Get a payment by ID (its customer, its vendor or an admin)' })
+  async findOne(@Param('id') id: string, @Req() req) {
+    return this.paymentsService.getPaymentForActor(id, req.user);
   }
 
   // ----------------------------
@@ -99,13 +134,13 @@ export class PaymentsController {
   }
 
   // ----------------------------
-  // REFUND PAYMENT (student)
+  // REFUND PAYMENT (student) - only for an already cancelled order
   // ----------------------------
   @Roles('student')
   @Put(':id/refund')
-  @ApiOperation({ summary: 'Refund held payment (student disputes)' })
+  @ApiOperation({ summary: 'Refund the held payment of a cancelled order (student)' })
   async refund(@Param('id') id: string, @Body() dto: RefundPaymentDto, @Req() req) {
-    return this.paymentsService.refundPayment(id, dto, req.user.sub);
+    return this.paymentsService.refundPaymentForCancelledOrder(id, dto, req.user.sub);
   }
 
   // ----------------------------

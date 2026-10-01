@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { PaymentsService } from './payment.service';
 import { PaystackService } from './paystack.service';
+import { PayoutsService } from './payouts.service';
 import { Payment } from './schema/payment.schema';
 import { Order } from '../orders/schema/order.schema';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -38,8 +39,17 @@ function createPaymentDoc(overrides: Record<string, any> = {}) {
     ...overrides,
   };
   doc.save = jest.fn().mockResolvedValue(doc);
+  doc.toObject = jest.fn(() => {
+    const { save, toObject, ...fields } = doc;
+    return { ...fields, metadata: fields.metadata && { ...fields.metadata } };
+  });
   return doc;
 }
+
+const ADMIN = { sub: '507f1f77bcf86cd799439015', role: 'admin' };
+const CUSTOMER = { sub: CUSTOMER_ID, role: 'student' };
+const VENDOR = { sub: VENDOR_ID, role: 'vendor' };
+const STRANGER = { sub: '507f1f77bcf86cd799439016', role: 'student' };
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -47,6 +57,7 @@ describe('PaymentsService', () => {
   let orderModel: any;
   let paystackService: jest.Mocked<PaystackService>;
   let notificationsService: { notifyAllAdmins: jest.Mock };
+  let payoutsService: { reconcilePayoutByReference: jest.Mock };
 
   beforeEach(async () => {
     paymentModel = jest.fn().mockImplementation((data: any) => ({
@@ -78,12 +89,14 @@ describe('PaymentsService', () => {
         },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
         { provide: NotificationsService, useValue: { notifyAllAdmins: jest.fn().mockResolvedValue(undefined) } },
+        { provide: PayoutsService, useValue: { reconcilePayoutByReference: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 
     service = module.get<PaymentsService>(PaymentsService);
     paystackService = module.get(PaystackService);
     notificationsService = module.get(NotificationsService);
+    payoutsService = module.get(PayoutsService);
   });
 
   describe('initializePayment', () => {
@@ -233,6 +246,19 @@ describe('PaymentsService', () => {
       await expect(
         service.handleWebhook(Buffer.from('{}'), 'bad-sig', { event: 'charge.success' }),
       ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('routes transfer events to the payouts service instead of touching payments', async () => {
+      paystackService.verifyWebhookSignature.mockReturnValue(true);
+
+      const result = await service.handleWebhook(Buffer.from('{}'), 'sig', {
+        event: 'transfer.success',
+        data: { reference: 'payout_abc123' },
+      });
+
+      expect(result).toEqual({ received: true });
+      expect(payoutsService.reconcilePayoutByReference).toHaveBeenCalledWith('payout_abc123');
+      expect(paymentModel.findOne).not.toHaveBeenCalled();
     });
 
     it('ignores events it does not handle', async () => {
@@ -437,10 +463,104 @@ describe('PaymentsService', () => {
     });
   });
 
+  describe('getPaymentForActor', () => {
+    it('throws ForbiddenException for a user who is not a party to the payment', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc());
+
+      await expect(service.getPaymentForActor(PAYMENT_ID, STRANGER)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('does not call Paystack for an unauthorized caller', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'pending' }));
+
+      await service.getPaymentForActor(PAYMENT_ID, STRANGER).catch(() => undefined);
+
+      expect(paystackService.verifyTransaction).not.toHaveBeenCalled();
+    });
+
+    it('returns the payment to its customer', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc());
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, CUSTOMER);
+
+      expect(result._id).toBe(PAYMENT_ID);
+    });
+
+    it('returns the payment to its vendor', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc());
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, VENDOR);
+
+      expect(result._id).toBe(PAYMENT_ID);
+    });
+
+    it('hides raw gateway data from a non-admin', async () => {
+      paymentModel.findById.mockResolvedValue(
+        createPaymentDoc({ gatewayResponse: { authorization: { last4: '4081' } } }),
+      );
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, CUSTOMER);
+
+      expect(result.gatewayResponse).toBeUndefined();
+    });
+
+    it('hides the raw Paystack refund response from a non-admin', async () => {
+      paymentModel.findById.mockResolvedValue(
+        createPaymentDoc({ metadata: { refundReason: 'late', refund: { transaction: {} } } }),
+      );
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, CUSTOMER);
+
+      expect(result.metadata).toEqual({ refundReason: 'late' });
+    });
+
+    it('returns raw gateway data to an admin', async () => {
+      const gatewayResponse = { authorization: { last4: '4081' } };
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ gatewayResponse }));
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, ADMIN);
+
+      expect(result.gatewayResponse).toEqual(gatewayResponse);
+    });
+
+    it('flags reconciliationPending when Paystack cannot be reached', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'pending' }));
+      paystackService.verifyTransaction.mockRejectedValue(new Error('network down'));
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, CUSTOMER);
+
+      expect(result.reconciliationPending).toBe(true);
+    });
+
+    it('logs a reconciliation failure as an error with the payment reference', async () => {
+      const errorLog = jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'pending', transactionId: 'ref123' }));
+      paystackService.verifyTransaction.mockRejectedValue(new Error('network down'));
+
+      await service.getPaymentForActor(PAYMENT_ID, CUSTOMER);
+
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('ref123'), expect.any(String));
+    });
+
+    it('does not flag reconciliationPending once Paystack confirms the payment', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'pending', amount: 150 }));
+      paystackService.verifyTransaction.mockResolvedValue({ status: 'success', amount: 15000 } as any);
+
+      const result = await service.getPaymentForActor(PAYMENT_ID, CUSTOMER);
+
+      expect(result.reconciliationPending).toBe(false);
+    });
+  });
+
   describe('getPaymentHistory', () => {
+    function givenHistoryQuery() {
+      const query = { select: jest.fn().mockResolvedValue([]) };
+      paymentModel.find.mockReturnValue({ sort: jest.fn().mockReturnValue(query) });
+      return query;
+    }
+
     it('filters by customerId for a student', async () => {
-      const sort = jest.fn().mockResolvedValue([]);
-      paymentModel.find.mockReturnValue({ sort });
+      givenHistoryQuery();
 
       await service.getPaymentHistory(CUSTOMER_ID, 'student');
 
@@ -448,8 +568,7 @@ describe('PaymentsService', () => {
     });
 
     it('filters by vendorId for a vendor', async () => {
-      const sort = jest.fn().mockResolvedValue([]);
-      paymentModel.find.mockReturnValue({ sort });
+      givenHistoryQuery();
 
       await service.getPaymentHistory(VENDOR_ID, 'vendor');
 
@@ -457,12 +576,25 @@ describe('PaymentsService', () => {
     });
 
     it('applies no filter for an admin', async () => {
-      const sort = jest.fn().mockResolvedValue([]);
-      paymentModel.find.mockReturnValue({ sort });
+      givenHistoryQuery();
 
       await service.getPaymentHistory('admin-id', 'admin');
 
       expect(paymentModel.find).toHaveBeenCalledWith({});
+    });
+
+    it('hides raw gateway data from a non-admin', async () => {
+      const query = givenHistoryQuery();
+
+      await service.getPaymentHistory(CUSTOMER_ID, 'student');
+
+      expect(query.select).toHaveBeenCalledWith('-gatewayResponse -metadata.refund');
+    });
+
+    it('throws ForbiddenException for a role with no payment history', async () => {
+      givenHistoryQuery();
+
+      await expect(service.getPaymentHistory('someone', 'rider')).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -485,6 +617,14 @@ describe('PaymentsService', () => {
       await expect(service.releasePayment(PAYMENT_ID, 'someone-else')).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('does not call Paystack when the actor is not the customer', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'pending' }));
+
+      await service.releasePayment(PAYMENT_ID, 'someone-else').catch(() => undefined);
+
+      expect(paystackService.verifyTransaction).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the payment is not held', async () => {
@@ -526,6 +666,14 @@ describe('PaymentsService', () => {
       await expect(service.submitMomoOtp(PAYMENT_ID, '123456', 'someone-else')).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('does not call Paystack when the actor is not the paying customer', async () => {
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'pending', paymentMethod: 'mobile_money' }));
+
+      await service.submitMomoOtp(PAYMENT_ID, '123456', 'someone-else').catch(() => undefined);
+
+      expect(paystackService.verifyTransaction).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the payment is not a pending mobile money charge', async () => {
@@ -614,6 +762,55 @@ describe('PaymentsService', () => {
         ConflictException,
       );
       expect(paystackService.refundTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refundPaymentForCancelledOrder', () => {
+    const dto = { reason: 'changed my mind' } as any;
+
+    beforeEach(() => {
+      paystackService.refundTransaction.mockResolvedValue({ status: 'pending' } as any);
+      paymentModel.findById.mockResolvedValue(createPaymentDoc({ status: 'held', transactionId: 'ref123' }));
+    });
+
+    it('throws ConflictException while the order is still active', async () => {
+      orderModel.findById.mockResolvedValue({ status: 'out_for_delivery' });
+
+      await expect(service.refundPaymentForCancelledOrder(PAYMENT_ID, dto, CUSTOMER_ID)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('does not call Paystack while the order is still active', async () => {
+      orderModel.findById.mockResolvedValue({ status: 'accepted' });
+
+      await service.refundPaymentForCancelledOrder(PAYMENT_ID, dto, CUSTOMER_ID).catch(() => undefined);
+
+      expect(paystackService.refundTransaction).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the order no longer exists', async () => {
+      orderModel.findById.mockResolvedValue(null);
+
+      await expect(service.refundPaymentForCancelledOrder(PAYMENT_ID, dto, CUSTOMER_ID)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws ForbiddenException for someone who is not a party to the payment', async () => {
+      orderModel.findById.mockResolvedValue({ status: 'cancelled' });
+
+      await expect(service.refundPaymentForCancelledOrder(PAYMENT_ID, dto, 'someone-else')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('refunds the held payment of a cancelled order', async () => {
+      orderModel.findById.mockResolvedValue({ status: 'cancelled' });
+
+      const result = await service.refundPaymentForCancelledOrder(PAYMENT_ID, dto, CUSTOMER_ID);
+
+      expect(result.status).toBe('refunded');
     });
   });
 
