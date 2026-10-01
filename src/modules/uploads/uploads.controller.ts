@@ -11,9 +11,8 @@ import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 
 import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
+import { IMAGE_UPLOAD_OPTIONS, MAX_IMAGES_PER_REQUEST } from "src/common/uploads/image-upload.options";
 import { CloudinaryService } from "./cloudinary.service";
-
-const MAX_IMAGES_PER_UPLOAD = 10;
 
 @ApiTags("Uploads")
 @Controller("upload")
@@ -23,7 +22,7 @@ export class UploadsController {
   @UseGuards(AccessTokenGuard)
   @ApiBearerAuth()
   @Post("image")
-  @UseInterceptors(FileInterceptor("image"))
+  @UseInterceptors(FileInterceptor("image", IMAGE_UPLOAD_OPTIONS))
   @ApiOperation({ summary: "Upload a single image" })
   @ApiResponse({ status: 201, description: "Image uploaded successfully" })
   async uploadImage(@UploadedFile() image: Express.Multer.File) {
@@ -41,7 +40,7 @@ export class UploadsController {
   @UseGuards(AccessTokenGuard)
   @ApiBearerAuth()
   @Post("images")
-  @UseInterceptors(FilesInterceptor("images", MAX_IMAGES_PER_UPLOAD))
+  @UseInterceptors(FilesInterceptor("images", MAX_IMAGES_PER_REQUEST, IMAGE_UPLOAD_OPTIONS))
   @ApiOperation({ summary: "Upload multiple images" })
   @ApiResponse({ status: 201, description: "Images uploaded successfully" })
   async uploadImages(@UploadedFiles() images: Express.Multer.File[]) {

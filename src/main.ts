@@ -1,10 +1,23 @@
-import { NestFactory } from '@nestjs/core';
+import { HttpAdapterHost, NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import {SwaggerModule, DocumentBuilder} from "@nestjs/swagger";
+import helmet from "helmet";
+import { MongooseExceptionFilter } from "./common/filters/http-exception.filter";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Swagger UI relies on inline scripts, so the strict CSP is only enforced where Swagger is not served.
+  app.use(helmet({ contentSecurityPolicy: isProduction }));
+
+  // Behind a load balancer every request arrives from the proxy's address, which
+  // would make rate limiting throttle all users together. Only trust
+  // X-Forwarded-For when a proxy is really in front, or clients could spoof it.
+  const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  if (trustedProxyHops > 0) app.set('trust proxy', trustedProxyHops);
 
   // The three frontends (customer/vendor/admin) each run on their own port in
   // dev, so every browser request to this API is cross-origin. Nest doesn't
@@ -27,16 +40,24 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
     transform: true,
   }));
+  app.useGlobalFilters(new MongooseExceptionFilter(app.get(HttpAdapterHost).httpAdapter));
   app.setGlobalPrefix('api');
 
-  const config = new DocumentBuilder()
-      .setTitle('CampusBid Backend')
-      .setDescription('The backend for Ecommerce CampusBid site')
-      .setVersion('1.0')
-      .addTag('Ecommerce CampusBid')
-      .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api-docs', app, document);
+  if (!isProduction) {
+    const config = new DocumentBuilder()
+        .setTitle('CampusBid Backend')
+        .setDescription('The backend for Ecommerce CampusBid site')
+        .setVersion('1.0')
+        .addTag('Ecommerce CampusBid')
+        .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api-docs', app, document);
+  }
+
   await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap();
+
+bootstrap().catch((error: unknown) => {
+  new Logger('Bootstrap').error('Failed to start the API', error instanceof Error ? error.stack : error);
+  process.exit(1);
+});
