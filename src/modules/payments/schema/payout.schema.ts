@@ -31,8 +31,27 @@ export class Payout {
 
   @Prop() adminNote?: string;
   @Prop() failureReason?: string;
+
+  // Stable across retries of the same payout - generated once on first
+  // approval attempt and reused on every retry, so Paystack's own
+  // duplicate-reference rejection backs up our status-guarded idempotency.
+  @Prop({ unique: true, sparse: true }) transferReference?: string;
+
+  @Prop() recipientCode?: string;
+  @Prop() transferCode?: string;
+  @Prop({ type: Object }) gatewayResponse?: Record<string, any>;
+
+  @Prop({ type: SchemaTypes.ObjectId, ref: 'User' })
+  approvedBy?: Types.ObjectId;
 }
 
 export const PayoutSchema = SchemaFactory.createForClass(Payout);
 
 PayoutSchema.index({ vendorId: 1, createdAt: -1 });
+
+// At most one payout per vendor may await approval at a time, so two
+// concurrent payout requests cannot both be created and approved.
+PayoutSchema.index(
+  { vendorId: 1, status: 1 },
+  { unique: true, partialFilterExpression: { status: 'requested' } },
+);
