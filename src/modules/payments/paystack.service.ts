@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import * as crypto from 'crypto';
@@ -30,6 +30,18 @@ export interface SubmitOtpResult {
 
 export interface RefundResult {
   status: string;
+  [key: string]: any;
+}
+
+export interface CreateRecipientResult {
+  recipient_code: string;
+  [key: string]: any;
+}
+
+export interface TransferResult {
+  status: string;
+  transfer_code: string;
+  reference: string;
   [key: string]: any;
 }
 
@@ -142,10 +154,98 @@ export class PaystackService {
     }
   }
 
+  // Registers a payout destination with Paystack ahead of a transfer. For
+  // Ghana mobile money, 'bank_code' is the network's List Banks code (MTN,
+  // VOD, ATL) - confirmed against Paystack's live /bank endpoint. This is
+  // uppercase and NOT the same value used for mobile_money charges
+  // elsewhere in this file, which takes the lowercase provider code instead.
+  async createTransferRecipient(
+    name: string,
+    accountNumber: string,
+    momoProvider: string,
+  ): Promise<CreateRecipientResult> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/transferrecipient`,
+        {
+          type: 'mobile_money',
+          name,
+          account_number: accountNumber,
+          bank_code: momoProvider.toUpperCase(),
+          currency: 'GHS',
+        },
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+      return response.data.data;
+    } catch (err) {
+      this.logger.error('Error creating Paystack transfer recipient', err);
+      throw new BadRequestException(this.extractGatewayErrorMessage(err) ?? 'Payment gateway error');
+    }
+  }
+
+  // Actually sends money out to a recipient. Paystack rejects a reused
+  // `reference` with a duplicate-transfer error rather than sending twice -
+  // callers should pass the same reference on every retry of the same
+  // payout so that guarantee backs up our own idempotency checks.
+  async initiateTransfer(
+    recipientCode: string,
+    amountPesewas: number,
+    reference: string,
+    reason: string,
+  ): Promise<TransferResult> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/transfer`,
+        {
+          source: 'balance',
+          amount: amountPesewas,
+          recipient: recipientCode,
+          reference,
+          reason,
+        },
+        { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      );
+      return response.data.data;
+    } catch (err) {
+      this.logger.error('Error initiating Paystack transfer', err);
+      throw new BadRequestException(this.extractGatewayErrorMessage(err) ?? 'Payment gateway error');
+    }
+  }
+
+  // Paystack's validation errors (bad recipient, account restrictions, etc.)
+  // come back with a human-readable 'message' that's safe and useful to show
+  // an admin directly, rather than burying it behind a generic failure -
+  // this is the only piece of the error response trusted here, never the
+  // raw body, to avoid leaking anything unexpected from the gateway.
+  private extractGatewayErrorMessage(err: unknown): string | undefined {
+    if (axios.isAxiosError(err)) {
+      const message = err.response?.data?.message;
+      if (typeof message === 'string') return message;
+    }
+    return undefined;
+  }
+
+  async verifyTransfer(reference: string): Promise<TransferResult> {
+    try {
+      const response = await axios.get(`${this.baseUrl}/transfer/${reference}`, {
+        headers: { Authorization: `Bearer ${this.secretKey}` },
+      });
+      return response.data.data;
+    } catch (err) {
+      this.logger.error('Error verifying Paystack transfer', err);
+      throw new InternalServerErrorException('Payment gateway error');
+    }
+  }
+
   // Recomputes the HMAC-SHA512 signature Paystack sends and compares it to the
   // one on the webhook request, confirming the payload genuinely came from Paystack.
   verifyWebhookSignature(rawBody: Buffer, signature: string): boolean {
-    const hash = crypto.createHmac('sha512', this.secretKey).update(rawBody).digest('hex');
-    return hash === signature;
+    if (!this.secretKey || !signature) return false;
+
+    const expected = crypto.createHmac('sha512', this.secretKey).update(rawBody).digest();
+    const received = Buffer.from(signature, 'hex');
+
+    // timingSafeEqual throws on unequal lengths, so the length check must come first.
+    return received.length === expected.length && crypto.timingSafeEqual(received, expected);
   }
 }
