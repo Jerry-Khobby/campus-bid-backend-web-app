@@ -68,7 +68,7 @@ describe('OrdersService', () => {
   beforeEach(async () => {
     orderModel = Object.assign(
       jest.fn().mockImplementation((doc: any) => ({ ...doc, save: jest.fn().mockResolvedValue(doc) })),
-      { findById: jest.fn(), find: jest.fn(), findOneAndUpdate: jest.fn() },
+      { findById: jest.fn(), find: jest.fn(), findOneAndUpdate: jest.fn(), updateOne: jest.fn() },
     );
     userModel = { findById: jest.fn() };
     productModel = {
@@ -1107,6 +1107,181 @@ describe('OrdersService', () => {
       await service.getOrders(customerId, 'student', { status: 'pending' } as any);
 
       expect(orderModel.find).toHaveBeenCalledWith({ customerId, status: 'pending' });
+    });
+  });
+
+  describe('openDispute', () => {
+    const reason = 'Two of the notebooks were missing';
+    const buildDisputed = () => buildOrder({ status: OrderStatus.DISPUTED, dispute: { reason } });
+
+    it('moves a delivered order to disputed with the reason', async () => {
+      buildSavingOrder({ status: OrderStatus.DELIVERED });
+      orderModel.findOneAndUpdate.mockResolvedValue(buildDisputed());
+
+      const result = await service.openDispute(orderId, customerId, { reason });
+
+      expect(result.status).toBe(OrderStatus.DISPUTED);
+    });
+
+    it('only disputes the order while it is still delivered', async () => {
+      buildSavingOrder({ status: OrderStatus.DELIVERED });
+      orderModel.findOneAndUpdate.mockResolvedValue(buildDisputed());
+
+      await service.openDispute(orderId, customerId, { reason });
+
+      expect(orderModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: orderId, status: OrderStatus.DELIVERED },
+        expect.objectContaining({
+          $set: expect.objectContaining({ status: OrderStatus.DISPUTED, dispute: expect.objectContaining({ reason }) }),
+        }),
+        { new: true },
+      );
+    });
+
+    it('throws ConflictException when the order changed before the dispute was saved', async () => {
+      buildSavingOrder({ status: OrderStatus.DELIVERED });
+      orderModel.findOneAndUpdate.mockResolvedValue(null);
+
+      await expect(service.openDispute(orderId, customerId, { reason })).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException for an order that has not been delivered', async () => {
+      buildSavingOrder({ status: OrderStatus.OUT_FOR_DELIVERY });
+
+      await expect(service.openDispute(orderId, customerId, { reason })).rejects.toThrow(ConflictException);
+    });
+
+    it("throws ForbiddenException for another customer's order", async () => {
+      buildSavingOrder({ status: OrderStatus.DELIVERED });
+
+      await expect(
+        service.openDispute(orderId, new Types.ObjectId().toString(), { reason }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('alerts the admins that the order needs review', async () => {
+      buildSavingOrder({ status: OrderStatus.DELIVERED });
+      orderModel.findOneAndUpdate.mockResolvedValue(buildDisputed());
+
+      await service.openDispute(orderId, customerId, { reason });
+
+      expect(notificationsService.notifyAllAdmins).toHaveBeenCalledWith(
+        'order_update',
+        'Order disputed',
+        expect.any(String),
+        expect.objectContaining({ orderId, reason }),
+      );
+    });
+  });
+
+  describe('confirmDelivery on a disputed order', () => {
+    it('throws ConflictException, leaving the decision to an admin', async () => {
+      buildSavingOrder({ status: OrderStatus.DISPUTED, ...withPayment });
+
+      await expect(service.confirmDelivery(orderId, customerId, {})).rejects.toThrow(ConflictException);
+      expect(paymentsService.releasePayment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveDispute', () => {
+    const adminId = new Types.ObjectId().toString();
+    const refund = { resolution: 'refund' as const, note: 'Vendor confirmed the items were missing' };
+    const release = { resolution: 'release' as const, note: 'Delivery photo shows every item' };
+
+    const claimDisputedOrder = (overrides: Record<string, any> = {}) => {
+      const order = buildOrder({ status: OrderStatus.DISPUTED, ...withPayment, ...overrides });
+      order.save.mockResolvedValue(order);
+      orderModel.findOneAndUpdate.mockResolvedValue(order);
+      return order;
+    };
+
+    it('refunds the customer and marks the order refunded', async () => {
+      claimDisputedOrder();
+
+      const result = await service.resolveDispute(orderId, adminId, refund);
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith(paymentId, { reason: refund.note }, customerId);
+      expect(result.status).toBe(OrderStatus.REFUNDED);
+    });
+
+    it('releases the payment to the vendor and completes the order', async () => {
+      claimDisputedOrder();
+
+      const result = await service.resolveDispute(orderId, adminId, release);
+
+      expect(paymentsService.releasePayment).toHaveBeenCalledWith(paymentId, customerId);
+      expect(result.status).toBe(OrderStatus.COMPLETED);
+    });
+
+    it('claims only an unresolved dispute, so two admins cannot both move the money', async () => {
+      claimDisputedOrder();
+
+      await service.resolveDispute(orderId, adminId, refund);
+
+      expect(orderModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: orderId, status: OrderStatus.DISPUTED, 'dispute.resolution': { $exists: false } },
+        expect.objectContaining({
+          $set: expect.objectContaining({ 'dispute.resolution': 'refund', 'dispute.resolutionNote': refund.note }),
+        }),
+        { new: true },
+      );
+    });
+
+    it('throws ConflictException when the order has no open dispute', async () => {
+      orderModel.findOneAndUpdate.mockResolvedValue(null);
+      orderModel.findById.mockResolvedValue(buildOrder({ status: OrderStatus.COMPLETED }));
+
+      await expect(service.resolveDispute(orderId, adminId, refund)).rejects.toThrow(ConflictException);
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      orderModel.findOneAndUpdate.mockResolvedValue(null);
+      orderModel.findById.mockResolvedValue(null);
+
+      await expect(service.resolveDispute(orderId, adminId, refund)).rejects.toThrow(NotFoundException);
+    });
+
+    it('passes a payment-rule rejection through and reopens the dispute', async () => {
+      const order = claimDisputedOrder();
+      paymentsService.releasePayment.mockRejectedValue(new ConflictException('Payment cannot be released'));
+
+      await expect(service.resolveDispute(orderId, adminId, release)).rejects.toThrow(ConflictException);
+      expect(orderModel.updateOne).toHaveBeenCalledWith({ _id: orderId }, expect.objectContaining({ $unset: expect.any(Object) }));
+      expect(order.save).not.toHaveBeenCalled();
+    });
+
+    it('reports a payment gateway failure as BadGatewayException and reopens the dispute', async () => {
+      claimDisputedOrder();
+      paymentsService.refundPayment.mockRejectedValue(new Error('Paystack timeout'));
+
+      await expect(service.resolveDispute(orderId, adminId, refund)).rejects.toThrow(BadGatewayException);
+      expect(orderModel.updateOne).toHaveBeenCalled();
+    });
+
+    it('resolves an order that never had a payment without moving money', async () => {
+      claimDisputedOrder({ paymentId: undefined });
+
+      const result = await service.resolveDispute(orderId, adminId, refund);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(result.status).toBe(OrderStatus.REFUNDED);
+    });
+
+    it('tells the customer and the vendor how the dispute was resolved', async () => {
+      claimDisputedOrder();
+
+      await service.resolveDispute(orderId, adminId, refund);
+
+      expect(notificationsService.notify).toHaveBeenCalledWith(
+        customerId, 'customer', 'order_status_changed', 'Dispute Resolved', expect.stringContaining(refund.note), expect.any(Object),
+      );
+      expect(notificationsService.notify).toHaveBeenCalledWith(
+        vendorId, 'vendor', 'order_status_changed', 'Dispute Resolved', expect.stringContaining(refund.note), expect.any(Object),
+      );
+    });
+
+    it('throws BadRequestException for a malformed order id', async () => {
+      await expect(service.resolveDispute('not-an-id', adminId, refund)).rejects.toThrow(BadRequestException);
     });
   });
 });

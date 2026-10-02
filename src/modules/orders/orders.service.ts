@@ -22,6 +22,8 @@ import { OrderQueryDto } from './dto/order-query.dto';
 import { AcceptOrderDto } from './dto/accept-order.dto';
 import { RejectOrderDto } from './dto/reject-order.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
+import { OpenDisputeDto } from './dto/open-dispute.dto';
+import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { Order, OrderDocument } from './schema/order.schema';
 import { OrderStatus } from './dto/order-status.enum';
 import { assertTransitionAllowed, VENDOR_PROGRESS_STATUSES } from './order-state-machine';
@@ -29,6 +31,7 @@ import {
   CENTS_PER_UNIT,
   DELIVERY_CODE_LENGTH,
   DELIVERY_FEE,
+  HTTP_SERVER_ERROR,
   MAX_DELIVERY_CODE_ATTEMPTS,
   MINUTES_TO_MILLISECONDS,
   ORDER_NUMBER_SUFFIX_RANGE,
@@ -538,7 +541,8 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
   ): Promise<OrderDocument> {
     const order = await this.findOrderOrFail(orderId);
     this.assertCustomerOwnsOrder(order, customerId);
-    assertTransitionAllowed(order.status, OrderStatus.COMPLETED);
+    // A disputed order may also become COMPLETED, but only an admin decides that.
+    this.assertOrderStatus(order, OrderStatus.DELIVERED);
 
     if (dto.rating) {
       order.rating = { score: dto.rating, review: dto.review, createdAt: new Date() };
@@ -557,6 +561,148 @@ async getOrderById(orderId: string, userId: string, role: string): Promise<any> 
     );
 
     return updated;
+  }
+
+  // -------------------------
+  // DISPUTES (Customer opens, Admin resolves)
+  // -------------------------
+  // A customer with a problem on a delivered order disputes it instead of
+  // confirming delivery. The payment stays held - auto-complete only picks up
+  // 'delivered' orders - until an admin refunds it or releases it to the vendor.
+  async openDispute(orderId: string, customerId: string, dto: OpenDisputeDto): Promise<OrderDocument> {
+    const order = await this.findOrderOrFail(orderId);
+    this.assertCustomerOwnsOrder(order, customerId);
+    assertTransitionAllowed(order.status, OrderStatus.DISPUTED);
+
+    const disputed = await this.markDisputed(order, dto.reason);
+    await this.alertAdmins(
+      'order_update',
+      'Order disputed',
+      `The customer disputed order ${disputed.orderNumber}; its payment is on hold until it is reviewed.`,
+      { orderId: String(disputed._id), reason: dto.reason },
+    );
+    await this.notifyVendor(
+      disputed,
+      'Order Disputed',
+      'The customer reported a problem with this order. The payment is on hold while our team reviews it.',
+    );
+    return disputed;
+  }
+
+  async resolveDispute(orderId: string, adminId: string, dto: ResolveDisputeDto): Promise<OrderDocument> {
+    const order = await this.claimDisputeResolution(orderId, adminId, dto);
+
+    try {
+      await this.settleDisputedPayment(order, dto);
+    } catch (error) {
+      await this.releaseDisputeClaim(orderId);
+      throw error;
+    }
+
+    const outcome = dto.resolution === 'refund' ? OrderStatus.REFUNDED : OrderStatus.COMPLETED;
+    this.changeStatus(order, outcome, `Dispute resolved (${dto.resolution}): ${dto.note}`);
+    const resolved = await order.save();
+    await this.notifyDisputeOutcome(resolved, dto);
+    return resolved;
+  }
+
+  // Conditional on 'delivered', so a delivery confirmed at the same moment
+  // wins cleanly instead of being overwritten.
+  private async markDisputed(order: OrderDocument, reason: string): Promise<OrderDocument> {
+    const now = new Date();
+    const disputed = await this.orderModel.findOneAndUpdate(
+      { _id: order._id, status: OrderStatus.DELIVERED },
+      {
+        $set: { status: OrderStatus.DISPUTED, dispute: { reason, openedAt: now } },
+        $push: { statusHistory: { status: OrderStatus.DISPUTED, timestamp: now, note: `Dispute opened: ${reason}` } },
+      },
+      { new: true },
+    );
+    if (!disputed) throw new ConflictException('This order can no longer be disputed');
+    return disputed;
+  }
+
+  // Setting `resolution` is the claim: only one admin's request can match the
+  // unresolved dispute, so the payment is never refunded and released twice.
+  private async claimDisputeResolution(
+    orderId: string,
+    adminId: string,
+    dto: ResolveDisputeDto,
+  ): Promise<OrderDocument> {
+    if (!Types.ObjectId.isValid(orderId)) throw new BadRequestException('Invalid order ID');
+
+    const claimed = await this.orderModel.findOneAndUpdate(
+      { _id: orderId, status: OrderStatus.DISPUTED, 'dispute.resolution': { $exists: false } },
+      {
+        $set: {
+          'dispute.resolution': dto.resolution,
+          'dispute.resolutionNote': dto.note,
+          'dispute.resolvedBy': new Types.ObjectId(adminId),
+          'dispute.resolvedAt': new Date(),
+        },
+      },
+      { new: true },
+    );
+    if (claimed) return claimed;
+
+    await this.findOrderOrFail(orderId);
+    throw new ConflictException('This order has no open dispute');
+  }
+
+  private async releaseDisputeClaim(orderId: string): Promise<void> {
+    await this.orderModel.updateOne(
+      { _id: orderId },
+      {
+        $unset: {
+          'dispute.resolution': '',
+          'dispute.resolutionNote': '',
+          'dispute.resolvedBy': '',
+          'dispute.resolvedAt': '',
+        },
+      },
+    );
+  }
+
+  // PaymentsService only accepts a party to the payment as the actor, so the
+  // admin's decision is carried out on the customer's behalf; the order's
+  // dispute record keeps which admin decided. A rejection from the payment
+  // rules (e.g. the payment is no longer held) is passed through as-is.
+  private async settleDisputedPayment(order: OrderDocument, dto: ResolveDisputeDto): Promise<void> {
+    if (!order.paymentId) return;
+
+    const paymentId = order.paymentId.toString();
+    const customerId = order.customerId.toString();
+    try {
+      if (dto.resolution === 'refund') {
+        await this.paymentsService.refundPayment(paymentId, { reason: dto.note }, customerId);
+      } else {
+        await this.paymentsService.releasePayment(paymentId, customerId);
+      }
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() < HTTP_SERVER_ERROR) throw error;
+      this.logger.error(`Settling the disputed payment failed for order ${order._id}`, error);
+      throw new BadGatewayException(
+        'We could not move the payment, so the dispute is still open. Please try again shortly.',
+      );
+    }
+  }
+
+  private async notifyDisputeOutcome(order: OrderDocument, dto: ResolveDisputeDto): Promise<void> {
+    const refunded = dto.resolution === 'refund';
+    await this.notifyCustomer(
+      order,
+      'Dispute Resolved',
+      refunded
+        ? `Your dispute was upheld and your payment is being refunded. ${dto.note}`
+        : `Your dispute was reviewed and the payment was released to the vendor. ${dto.note}`,
+    );
+    await this.notifyVendor(
+      order,
+      'Dispute Resolved',
+      refunded
+        ? `The dispute was upheld and the customer was refunded. ${dto.note}`
+        : `The dispute was reviewed and the payment was released to you. ${dto.note}`,
+    );
   }
 
   // -------------------------

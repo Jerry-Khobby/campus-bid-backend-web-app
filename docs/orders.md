@@ -83,6 +83,20 @@ Guards: `AccessTokenGuard` (JWT bearer, populates `req.user.sub`/`req.user.role`
 - **Errors:** `NotFoundException`; `ForbiddenException` if not the owning customer; `ConflictException` ("Order must be in 'delivered' status") if the order isn't currently `delivered`
 - Optionally records a rating inline, sets `status = COMPLETED`, appends to `statusHistory`, and — if `paymentId` is set — calls `PaymentsService.releasePayment` **without** a try/catch, so a payment-release failure propagates and fails the whole request (order is not saved as completed). See Cross-Module Integration.
 
+#### `POST /api/orders/:id/dispute`
+- **Auth:** `student`, must own the order
+- **Request:** `id` (path); body = `OpenDisputeDto`: `reason` (string, 10–1000 characters, required)
+- **Response:** `{ success: true, message: 'Dispute submitted for review', data: <OrderDocument> }`
+- **Errors:** `NotFoundException`; `ForbiddenException` if not the owning customer; `ConflictException` if the order is not `delivered` (including when it was confirmed or disputed a moment earlier)
+- Moves a `delivered` order to `disputed` with `dispute: { reason, openedAt }`, using a conditional update on `status: 'delivered'`. The payment stays `held`: auto-complete only picks up `delivered` orders, and `confirm-delivery` refuses a disputed order. Alerts all admins and notifies the vendor.
+
+#### `PATCH /api/orders/:id/dispute/resolve`
+- **Auth:** `admin`
+- **Request:** `id` (path); body = `ResolveDisputeDto`: `resolution` (`'refund'` or `'release'`, required), `note` (string, 3–1000 characters, required; shown to both parties)
+- **Response:** `{ success: true, message: 'Dispute resolved: <resolution>', data: <OrderDocument> }`
+- **Errors:** `BadRequestException` for an invalid id; `NotFoundException`; `ConflictException` if the order has no open dispute (already resolved, or never disputed); a payment-rule rejection (e.g. the payment is no longer `held`) is passed through; `BadGatewayException` if the payment provider fails
+- Claims the dispute atomically by setting `dispute.resolution`, `resolutionNote`, `resolvedBy` and `resolvedAt` only while none is set, so two admins cannot both move the money. Then `refund` calls `PaymentsService.refundPayment` and sets `status = refunded`, and `release` calls `PaymentsService.releasePayment` and sets `status = completed`. Both payment calls act as the paying customer, because the payments service only accepts a party to the payment; `dispute.resolvedBy` records the admin. If moving the payment fails, the claim is undone and the dispute stays open. Notifies the customer and the vendor with the note.
+
 ### Vendor Actions
 
 #### `PATCH /api/orders/:id/accept`
@@ -149,7 +163,7 @@ Guards: `AccessTokenGuard` (JWT bearer, populates `req.user.sub`/`req.user.role`
 - Finds every order with `status === delivered`, sets each to `completed` with a `statusHistory` note "Auto-completed by system". This is a manually-triggered admin endpoint, not an automatic cron job.
 
 ## State Machines
-`OrderStatus` enum: `pending`, `accepted`, `preparing`, `ready`, `out_for_delivery`, `delivered`, `completed`, `cancelled`, `refunded`.
+`OrderStatus` enum: `pending`, `accepted`, `preparing`, `ready`, `out_for_delivery`, `delivered`, `disputed`, `completed`, `cancelled`, `refunded`.
 
 Transitions actually enforced by dedicated service methods (each via `assertOrderStatus`, which throws `ConflictException` if the order isn't in the expected starting state):
 
@@ -160,6 +174,9 @@ Transitions actually enforced by dedicated service methods (each via `assertOrde
 | `out_for_delivery` | `delivered` | `markDelivered` | caller is owning vendor |
 | `delivered` | `completed` | `confirmDelivery` | caller is owning customer; releases payment if present |
 | `delivered` | `completed` | `autoCompleteDeliveredOrders` (admin-triggered, bulk) | none |
+| `delivered` | `disputed` | `openDispute` | caller is owning customer; payment stays held |
+| `disputed` | `refunded` | `resolveDispute` (`refund`) | admin; refunds payment if present |
+| `disputed` | `completed` | `resolveDispute` (`release`) | admin; releases payment if present |
 | any of `pending/accepted/preparing/ready/out_for_delivery` | `cancelled` | `cancelOrder` | caller is owning customer; refunds payment if present |
 
 Two routes bypass this state machine entirely:

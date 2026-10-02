@@ -1,8 +1,18 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, SchemaTypes, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
+import { DISPUTE_RESOLUTIONS, type DisputeResolution } from '../order.constants';
 
 export type OrderDocument = Order & Document;
+
+export interface OrderDispute {
+  reason: string;
+  openedAt: Date;
+  resolution?: DisputeResolution;
+  resolutionNote?: string;
+  resolvedBy?: Types.ObjectId;
+  resolvedAt?: Date;
+}
 
 @Schema({ timestamps: true, versionKey: false })
 export class Order {
@@ -96,6 +106,7 @@ export class Order {
       'ready',
       'out_for_delivery',
       'delivered',
+      'disputed',
       'completed',
       'cancelled',
       'refunded',
@@ -146,6 +157,22 @@ export class Order {
 
   @Prop() estimatedDeliveryTime?: Date;
   @Prop() actualDeliveryTime?: Date;
+
+  // Opened by the customer on a delivered order. The payment stays held until
+  // an admin resolves it, which is claimed atomically by setting `resolution`
+  // so two admins cannot both move the money.
+  @Prop({
+    type: {
+      reason: { type: String, required: true },
+      openedAt: { type: Date, required: true },
+      resolution: { type: String, enum: DISPUTE_RESOLUTIONS },
+      resolutionNote: { type: String },
+      resolvedBy: { type: SchemaTypes.ObjectId, ref: 'User' },
+      resolvedAt: { type: Date },
+    },
+    _id: false,
+  })
+  dispute?: OrderDispute;
 
   @Prop() vendorNotes?: string;
   @Prop() customerNotes?: string;

@@ -27,6 +27,8 @@ import { AcceptOrderDto } from './dto/accept-order.dto';
 import { RejectOrderDto } from './dto/reject-order.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { MarkDeliveredDto } from './dto/mark-delivered.dto';
+import { OpenDisputeDto } from './dto/open-dispute.dto';
+import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
@@ -92,6 +94,26 @@ export class OrdersController {
   async cancelOrder(@Request() req, @Param('id') id: string, @Body() dto: CancelOrderDto) {
     const data = await this.ordersService.cancelOrder(id, req.user.sub, dto);
     return { success: true, message: 'Order cancelled successfully', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('student')
+  @Post(':id/dispute')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Report a problem with a delivered order; the payment stays held until an admin resolves it' })
+  async openDispute(@Request() req, @Param('id') id: string, @Body() dto: OpenDisputeDto) {
+    const data = await this.ordersService.openDispute(id, req.user.sub, dto);
+    return { success: true, message: 'Dispute submitted for review', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('admin')
+  @Patch(':id/dispute/resolve')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Resolve a dispute by refunding the customer or releasing the payment to the vendor' })
+  async resolveDispute(@Request() req, @Param('id') id: string, @Body() dto: ResolveDisputeDto) {
+    const data = await this.ordersService.resolveDispute(id, req.user.sub, dto);
+    return { success: true, message: `Dispute resolved: ${dto.resolution}`, data };
   }
 
   @UseGuards(AccessTokenGuard, RolesGuard)
