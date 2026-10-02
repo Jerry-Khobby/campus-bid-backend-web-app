@@ -411,6 +411,16 @@ describe('PaymentsService', () => {
 
       expect(paymentModel.find).toHaveBeenCalledWith({});
     });
+
+    it("includes each payment's payout status, so released money is not mistaken for paid out", async () => {
+      const sort = jest.fn().mockResolvedValue([]);
+      const populate = jest.fn().mockReturnThis();
+      paymentModel.find.mockReturnValue({ populate, sort });
+
+      await service.listPayments({} as any);
+
+      expect(populate).toHaveBeenCalledWith('payoutId', 'status');
+    });
   });
 
   describe('updatePayment', () => {
