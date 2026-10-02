@@ -21,7 +21,7 @@ Collection: `users` (Mongoose model `User`, `{ timestamps: true }` — adds `cre
 | `paymentMethods` | Array | default `[]` | See Payment Method sub-table |
 | `refreshToken` | String | default `null` | Stores the argon2 hash of the current refresh token |
 | `isVerified` | Boolean | default `false` | Set `true` automatically for Google sign-ups; no email-verification flow exists in this module |
-| `isActive` | Boolean | default `true` | Not read/enforced anywhere in this module's code |
+| `isActive` | Boolean | default `true` | **Now live-enforced on every authenticated request**, not just at login — see `docs/architecture.md`'s account-status check. Admins can suspend a student the same way vendors are suspended. |
 
 **Profile sub-schema**
 
@@ -68,17 +68,17 @@ Public (no guard) routes: `register`, `login`, `forgot-password`, `reset-passwor
 ### Registration & Login
 
 #### `POST /api/users/register`
-- **Auth:** public
-- **Request:** `multipart/form-data` — `profileImage` (optional file) + `CreateUserDto` fields: `email` (string, required), `password` (string, required, strong-password rules: min 8 chars, upper/lower/number/symbol), `refreshToken` (string, required by the DTO though unused by the handler), `profile` (optional nested object: `firstName`, `lastName`, `phoneNumber`, `studentId`, `university`, `profileImage`), `addresses` (optional array), `savedItems` (optional string array), `paymentMethods` (optional array). No `role` field — the resulting account is always `role: 'student'`.
+- **Auth:** public, rate-limited (`SENSITIVE_THROTTLE` — see `docs/architecture.md`)
+- **Request:** `multipart/form-data` — `profileImage` (optional file, validated by `IMAGE_UPLOAD_OPTIONS`) + `CreateUserDto` fields: `email` (string, required), `password` (string, required, strong-password rules: min 8 chars, upper/lower/number/symbol), `profile` (optional nested object: `firstName`, `lastName`, `phoneNumber`, `studentId`, `university`, `profileImage`), `addresses` (optional array). No `role`, `refreshToken`, `savedItems`, or `paymentMethods` field — those three were removed from the DTO entirely (a client could previously submit an arbitrary `refreshToken` value at registration, which was accepted but discarded; `savedItems`/`paymentMethods` aren't meant to be set at registration time anyway). The resulting account is always `role: 'student'`.
 - **Response:** `{ success: true, message: "User registered successfully", user: SafeUser, accessToken, refreshToken }` (service returns `{ user, accessToken, refreshToken }`, spread into the controller's envelope)
 - **Errors:** 409 `ConflictException` if the email exists in cache or DB; 500 `InternalServerErrorException` if the DB save fails
 - Uploads `profileImage` to Cloudinary first (if provided) and stores its `secure_url` on `profile.profileImage`; also caches `{id, email}` under `user:<email>` for 1 hour.
 
 #### `POST /api/users/login`
-- **Auth:** public
+- **Auth:** public, rate-limited
 - **Request:** `LoginDto` — `email` (string, required), `password` (string, required, same strong-password validator as register)
 - **Response:** `{ success: true, message: "Login successful", user: SafeUser, accessToken, refreshToken }`
-- **Errors:** 404 `NotFoundException("Invalid email or password")` if no user found; 401 `UnauthorizedException` if the account has no password (Google-only account) or the password doesn't match
+- **Errors:** `401 UnauthorizedException("Invalid email or password")` for **all** of: unknown email, a Google-only account (no password), or a wrong password. These previously returned different status codes (404 vs 401), which let a caller enumerate which emails have accounts; `isPasswordCorrect` (`src/modules/users/password-check.ts`, shared with the Vendors module) now always runs a `bcrypt.compare` against either the real password hash or a cached dummy hash of the same cost when there's no real user/no password to compare against, so the response takes the same time either way.
 - Looks up the user via cache first (`user:<email>`), falling back to a DB query.
 
 #### `POST /api/users/refresh`
@@ -96,24 +96,24 @@ Public (no guard) routes: `register`, `login`, `forgot-password`, `reset-passwor
 ### Password Management
 
 #### `POST /api/users/change-password`
-- **Auth:** authenticated (`student`)
+- **Auth:** authenticated (`student`), rate-limited
 - **Request:** `ChangePasswordDto` — `oldPassword`, `newPassword` (both required, strong-password rules)
 - **Response:** `{ success: true, message: "Password updated successfully" }` (returned directly by the service, not wrapped by the controller)
 - **Errors:** 404 if user not found; 401 if the account has no password (Google-only) or `oldPassword` doesn't match
+- Also clears the stored `refreshToken` hash, ending every existing session on this account — including one an attacker who had the old password might already hold.
 
 #### `POST /api/users/forgot-password`
-- **Auth:** public
+- **Auth:** public, rate-limited
 - **Request:** `ForgotPasswordDto` — `email` (required)
-- **Response:** `{ success: true, message: "Password reset link sent to your email", resetToken }`
-- **Errors:** 404 if no account matches the email; 500 if the email fails to send
-- Generates a random 32-byte hex token, caches it (`reset:<token>` → userId) for 15 minutes, and emails a reset link. **Note:** the response includes the raw `resetToken` in the body (commented `// remove in production` in the source) — this leaks the reset token in the API response rather than only via email.
+- **Response:** `{ success: true, message: "If an account exists for this email, a password reset link has been sent" }` — **always** this response, whether or not the email matches an account, so this endpoint can't be used to enumerate registered emails. The raw `resetToken` is **no longer returned in the response body** (previously marked `// remove in production` in the source — that placeholder is now gone); it only ever reaches the user via the emailed link, and a failed send is logged rather than surfaced as a 500 (so a send failure also can't be distinguished from "no such account" by the caller). Email sending is fire-and-forget (not awaited), so a known email isn't measurably slower to respond to than an unknown one.
+- Generates a random 32-byte hex token, caches it (`reset:<token>` → userId) for 15 minutes, and emails a reset link to the correct frontend per role (`APP_URL` for students, `ADMIN_APP_URL` for admins).
 
 #### `POST /api/users/reset-password`
-- **Auth:** public
+- **Auth:** public, rate-limited
 - **Request:** `ResetPasswordDto` — `token` (required), `newPassword` (required, strong-password rules)
 - **Response:** `{ success: true, message: "Password has been reset successfully" }`
 - **Errors:** 401 if the token is invalid/expired (cache miss); 404 if the underlying user no longer exists
-- Deletes the cache entry after a successful reset (single-use token).
+- Deletes the cache entry after a successful reset (single-use token) and clears the stored `refreshToken` hash (same reasoning as change-password).
 
 ### Profile
 
@@ -198,11 +198,9 @@ Public (no guard) routes: `register`, `login`, `forgot-password`, `reset-passwor
 ## Business Rules & Notes
 - **No self-service path to `role: "admin"`:** `CreateUserDto` doesn't expose `role`, so every account created via `POST /users/register` (or Google sign-in) is `'student'`. The only way to create an admin is `npm run create-admin -- <email>` (`src/scripts/create-admin.ts`), a standalone script (not an HTTP endpoint) that promotes an **already-registered** user's `role` to `'admin'` directly in the database. This is deliberate: registering normally first means the account already has a correctly-hashed password, so the script never touches password logic. This previously wasn't the case — `CreateUserDto.role` was an unrestricted optional string, so any caller could self-register as an admin; that hole is now closed.
 - **Response shape is inconsistent within this module itself:** most endpoints return `{ success, message, <dataKey> }` (e.g. `user`, `addresses`, `paymentMethods`, `tokens`), but `changePassword`, `forgotPassword`, and `resetPassword` return the service's raw `{ success, message }` object directly (no controller-level wrapping, though the shape happens to coincide), and `googleCallback` returns `{ success, user, accessToken, refreshToken }` with no `message` key at all.
-- **Password exclusion:** `excludePassword` strips only the `password` field before returning a user — `refreshToken` (the argon2 hash) is *not* stripped and is present on the `SafeUser` objects returned from most endpoints (e.g. profile, login, register).
-- **Forgot-password token leakage:** the plaintext `resetToken` is included in the `forgot-password` HTTP response body in addition to being emailed — a marked `// remove in production` comment in the source confirms this is a known placeholder, not intentional design.
+- **Password exclusion:** `excludePassword` now strips both `password` **and** `refreshToken` (the argon2 hash) before returning a user — previously only `password` was stripped, so the refresh-token hash leaked on `SafeUser` objects returned from profile, login, and register. This brings the Users module's `excludePassword` in line with how the Vendors module's always worked.
 - **Cross-module dependency:** `CloudinaryService` (from the `uploads` module) is used for both registration-time and on-demand profile image uploads.
-- **Cross-module dependency:** `MailService` (from `utils`) sends the password-reset email; a send failure is converted to a 500 rather than silently ignored.
+- **Cross-module dependency:** `MailService` (from `utils`) sends the password-reset email; a send failure is now logged rather than converted to a 500 — the caller already got a generic success response (see forgot-password above), so there's nothing meaningful left to report back to them.
 - **Caching:** user lookups by email are cached (`user:<email>`, 1 hour TTL) on register/login and refreshed on profile-affecting writes is *not* done for the Users module (unlike Vendors, which refreshes its cache entry after several profile-related updates) — the Users module never invalidates or refreshes `user:<email>` after the initial write, so cached lookups can go stale relative to DB state until the TTL expires.
 - **`savedItems`** exists on the schema (references to `Product`) but has no corresponding endpoint in this module to read or mutate it.
-- **`isActive`** is stored but never checked by any guard or service method in this module (an inactive user can still log in and use the API).
-- **CreateUserDto.refreshToken** is declared as a required string on the registration DTO but is never read by `createUser` — a client must supply some string value to pass validation even though it's discarded.
+- **`isActive`** is now live-enforced on every request via the shared account-status check (see `docs/architecture.md`), not just at login — an admin can suspend a student and have it take effect within 30 seconds, even mid-session.

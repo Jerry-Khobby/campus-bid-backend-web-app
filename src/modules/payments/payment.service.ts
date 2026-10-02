@@ -399,6 +399,9 @@ export class PaymentsService {
       .find(filter)
       .populate('customerId', 'email profile.firstName profile.lastName')
       .populate('vendorId', 'email profile.businessName')
+      // A released payment has only reached the vendor's balance; the payout
+      // it is claimed by says whether the money was actually sent.
+      .populate('payoutId', 'status')
       .sort({ createdAt: -1 });
   }
 

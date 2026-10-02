@@ -1,4 +1,4 @@
-import { Inject, Injectable, UnauthorizedException } from "@nestjs/common";
+import { Inject, Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, ExtractJwt } from 'passport-jwt';
 import { ConfigService } from "@nestjs/config";
@@ -19,6 +19,8 @@ type JwtPayload = {
 
 @Injectable()
 export class AccessTokenStrategy extends PassportStrategy(Strategy, 'jwt') {
+  private readonly logger = new Logger(AccessTokenStrategy.name);
+
   constructor(
     configService: ConfigService,
     @InjectConnection() private readonly connection: Connection,
@@ -36,14 +38,26 @@ export class AccessTokenStrategy extends PassportStrategy(Strategy, 'jwt') {
     return payload;
   }
 
+  // A cache or DB outage here must not take down every authenticated route in
+  // the API - fails open (treats the account as active) and logs loudly
+  // instead, which only widens the existing up-to-30s staleness window this
+  // check already accepts, rather than rejecting every request outright.
   private async isAccountActive(payload: JwtPayload): Promise<boolean> {
-    const cacheKey = getAccountStatusCacheKey(payload.role, payload.sub);
-    const cachedStatus = await this.cacheManager.get<boolean>(cacheKey);
-    if (typeof cachedStatus === "boolean") return cachedStatus;
+    try {
+      const cacheKey = getAccountStatusCacheKey(payload.role, payload.sub);
+      const cachedStatus = await this.cacheManager.get<boolean>(cacheKey);
+      if (typeof cachedStatus === "boolean") return cachedStatus;
 
-    const isActive = await this.findAccountActiveStatus(payload);
-    await this.cacheManager.set(cacheKey, isActive, ACCOUNT_STATUS_CACHE_TTL_MS);
-    return isActive;
+      const isActive = await this.findAccountActiveStatus(payload);
+      await this.cacheManager.set(cacheKey, isActive, ACCOUNT_STATUS_CACHE_TTL_MS);
+      return isActive;
+    } catch (error) {
+      this.logger.error(
+        `Account-status check failed for ${payload.role} ${payload.sub}; allowing the request through: ${error.message}`,
+        error.stack,
+      );
+      return true;
+    }
   }
 
   private async findAccountActiveStatus(payload: JwtPayload): Promise<boolean> {

@@ -8,8 +8,10 @@
 - **Realtime:** Socket.IO via `@nestjs/websockets` / `@nestjs/platform-socket.io`
 - **Auth:** JWT (access + refresh tokens) via `@nestjs/jwt` + `passport-jwt`, plus Google OAuth via `passport-google-oauth20`
 - **File storage:** Cloudinary
-- **Payments:** Paystack (REST API, called directly via `axios` — no SDK)
-- **Docs:** Swagger/OpenAPI, served at `/api-docs`
+- **Payments:** Paystack (REST API, called directly via `axios` — no SDK); both the customer-charge and vendor-payout (Transfer API) legs — see `docs/payments.md`
+- **Rate limiting:** `@nestjs/throttler`, registered globally
+- **Security headers:** `helmet`
+- **Docs:** Swagger/OpenAPI, served at `/api-docs` (disabled in production)
 
 ## Global request pipeline
 
@@ -18,7 +20,11 @@ Configured in `src/main.ts`:
 - Global prefix: every route in this document is written with the `/api` prefix already applied (e.g. a controller decorated `@Controller("products")` with a method `@Get(":id")` is reachable at `GET /api/products/:id`).
 - Global `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })` — unknown body/query fields are rejected with a 400, and payloads are transformed into their DTO classes (so `@Type(() => Number)` on query DTOs actually coerces strings to numbers).
 - `NestFactory.create(AppModule, { rawBody: true })` — the raw request body is preserved on `req.rawBody`, required by the Paystack webhook handler to verify the HMAC signature (see [payments.md](./payments.md)).
-- Swagger UI at `/api-docs`, generated from the `@ApiTags`/`@ApiOperation`/`@ApiResponse`/`@ApiBearerAuth` decorators already present on every controller — treat it as the live, always-in-sync source of exact request/response schemas; this document focuses on structure, flow, and the "why" instead of duplicating every field (duplicating that in prose is exactly what let the previous version of this documentation drift out of sync with the real API).
+- `helmet({ contentSecurityPolicy: isProduction })` — the strict CSP is only enforced in production, where Swagger (which needs inline scripts) is disabled anyway.
+- **Rate limiting:** a global `APP_GUARD` (`HttpThrottlerGuard` in `src/common/throttle/throttle.config.ts`) applies a default limit (300 req/min per client) to every HTTP route; sensitive auth routes (login, register, change/forgot/reset-password, token refresh — see each module's docs) additionally carry `@Throttle(SENSITIVE_THROTTLE)` (10 attempts per 15 minutes). The tracker key is **IP + the targeted email from the request body** when present, not IP alone — campus networks put many students behind one NAT address, so keying on IP alone would let one person's failed logins lock out everyone else on the same network. `app.set('trust proxy', ...)` is only enabled when `TRUST_PROXY_HOPS` is explicitly set to a positive number, so a client can't spoof `X-Forwarded-For` to dodge the limit when no proxy is actually in front of the app.
+- **Global exception filter:** `MongooseExceptionFilter` (`src/common/filters/http-exception.filter.ts`) catches `Mongoose.Error.CastError`/`ValidationError` and converts them to `400 BadRequestException` with a readable message, instead of leaking as raw `500`s.
+- `bootstrap()`'s promise is explicitly `.catch()`-handled — a startup failure is logged and exits the process (`process.exit(1)`) rather than failing silently.
+- Swagger UI at `/api-docs` (non-production only), generated from the `@ApiTags`/`@ApiOperation`/`@ApiResponse`/`@ApiBearerAuth` decorators already present on every controller — treat it as the live, always-in-sync source of exact request/response schemas; this document focuses on structure, flow, and the "why" instead of duplicating every field (duplicating that in prose is exactly what let the previous version of this documentation drift out of sync with the real API).
 
 ## Module map
 
@@ -44,7 +50,7 @@ Modules registered in `src/app.module.ts`:
 | `CategoriesModule` | Product category taxonomy |
 | `FlashSaleModule` | Bidding-style flash sales |
 | `OrdersModule` | Order lifecycle, delivery confirmation |
-| `PaymentsModule` | Paystack payment lifecycle, vendor payout ledger (`PayoutsService`) |
+| `PaymentsModule` | Paystack payment lifecycle, vendor payout request/admin-approval/disbursement (`PayoutsService`) |
 | `ChatModule` | Buyer↔vendor conversations (REST + WebSocket) |
 | `NotificationsModule` | Cross-cutting notification delivery (REST + WebSocket) |
 | `ReviewsModule` | Per-product/vendor reviews tied to completed orders |
@@ -58,6 +64,8 @@ See `docs/<module>.md` for each module's detail.
 These are established patterns — new code should follow them rather than introduce new ones.
 
 **Auth guards.** Protected routes use `@UseGuards(AccessTokenGuard, RolesGuard)` plus `@Roles("student" | "vendor" | "admin")` (from `src/common/guards/` and `src/common/decorators/roles.decorator.ts`). The authenticated actor's id/role is read from `req.user.sub` / `req.user.role` — there is no `@CurrentUser()` decorator in this codebase. See [authentication.md](./authentication.md).
+
+**Live account-status enforcement.** `AccessTokenStrategy.validate()` no longer just trusts the JWT payload — it also checks the account's current `isActive` status on every request (`src/common/guards/account-status.ts` resolves the right model, `User` or `Vendor`, from the token's `role`), cached per account for 30 seconds (`@nestjs/cache-manager`) so this doesn't mean a DB read on every single request. An admin suspending a user/vendor also explicitly evicts that cache entry, so the suspension takes effect immediately rather than waiting out the 30-second window. A still-valid, unexpired access token for a now-suspended account is rejected with `401 UnauthorizedException("This account is not active")` — previously, suspension only took effect the next time the account tried to log in or refresh.
 
 **Cross-module data access.** Two patterns coexist, by design:
 1. A module injects another module's **Mongoose model directly** for read-only cross-references (e.g. `OrdersService` reads `User`/`Product`/`Vendor` models directly rather than calling their services). This is the majority pattern for queries and aggregations.
@@ -80,4 +88,5 @@ These are established patterns — new code should follow them rather than intro
 ## Known structural quirks worth knowing about
 
 - Several feature modules (`products`, `orders`, `vendors`, `categories`, `reviews`, `uploads`, `flash-sales`, `notifications`) each independently register their own `JwtModule.registerAsync(...)` and JWT strategies rather than sharing one central `AuthModule`. This is pre-existing and intentional-enough to leave alone — every module registers the strategy as `global: true`, so it's redundant but not broken.
-- `src/common/filters/http-exception.filter.ts` exists in the repo but is empty and not wired up anywhere (no `APP_FILTER` provider, no `@UseFilters`) — exception formatting is whatever Nest's default exception filter produces, not a custom one.
+- **WebSocket gateways now share one auth service.** `SocketAuthService` (`src/modules/notifications/socket-auth/`) verifies the JWT during the socket.io handshake (via namespace middleware, `afterInit`) and restricts allowed origins; both `NotificationsGateway` and `ChatGateway` use it. This replaced two independent, inconsistent implementations — the Notifications gateway previously verified a token only inside `handleConnection` with no origin restriction, and the Chat gateway previously had **no authentication at all** (open CORS, any socket could connect and claim to be any user). See `docs/chat.md` and `docs/notifications.md`.
+- `PESEWAS_PER_CEDI` (the pesewas-per-cedi conversion constant) is independently defined in both `payment.service.ts` and `payouts.service.ts` rather than shared from one place, specifically to avoid a circular import — `PaymentsService` injects `PayoutsService` (to route Paystack transfer webhooks), so `PayoutsService` must not import anything back from `PaymentsService`.
