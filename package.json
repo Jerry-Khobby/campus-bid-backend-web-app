@@ -42,7 +42,7 @@
     "@nestjs/schedule": "^6.0.1",
     "@nestjs/swagger": "^11.2.1",
     "@nestjs/throttler": "^6.4.0",
-    "@nestjs/websockets": "^11.1.8",
+    "@nestjs/websockets": "^12.1.1",
     "@types/bcrypt": "^6.0.0",
     "argon2": "^0.44.0",
     "axios": "^1.20.0",
