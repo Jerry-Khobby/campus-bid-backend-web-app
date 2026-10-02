@@ -1,14 +1,14 @@
-import { Injectable, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import type { Cache } from 'cache-manager';
 
 import { Notification,NotificationDocument } from './schema/notifications.schema';
 import { CreateNotificationDto } from './dto/create-notifications.dto';
 import { NotificationsGateway } from './notifications.gateway';
 import { Vendor } from '../vendors/schema/vendor.schema';
 import { User } from '../users/schema/user.schema';
+
+const MAX_LISTED_NOTIFICATIONS = 50;
 
 @Injectable()
 export class NotificationsService {
@@ -22,15 +22,8 @@ export class NotificationsService {
     @InjectModel(Vendor.name)
     private readonly vendorModel: Model<any>,
 
-    @Inject(CACHE_MANAGER)
-    private readonly cacheManager: Cache,
-
     private readonly gateway: NotificationsGateway,
   ) {}
-
-  private unreadKey(userId: string) {
-    return `notifications:unread:${userId}`;
-  }
 
   /**
    * Validate userId belongs to customer or vendor
@@ -63,39 +56,24 @@ export class NotificationsService {
       userId: new Types.ObjectId(dto.userId),
     });
 
-    // Update unread counter
-    const current = (await this.cacheManager.get<number>(this.unreadKey(dto.userId))) || 0;
-    await this.cacheManager.set(this.unreadKey(dto.userId), current + 1, 3_600_000);
-
     return notification;
   }
 
-  /**
-   * Get last 50 notifications for user
-   */
+  // Read straight from the database: a cached list went stale the moment a
+  // notification arrived, was read or was deleted, so the bell showed stale
+  // items and marking or deleting appeared to do nothing. The (userId,
+  // createdAt) index keeps this query cheap.
   async listUserNotifications(userId: string) {
-    const cacheKey = `notifications:list:${userId}`;
-    const cached = await this.cacheManager.get<NotificationDocument[]>(cacheKey);
-
-    if (cached) return cached;
-
-    const notifications = await this.notificationModel
+    return this.notificationModel
       .find({ userId })
       .sort({ createdAt: -1 })
-      .limit(50)
+      .limit(MAX_LISTED_NOTIFICATIONS)
       .lean()
       .exec();
-
-    await this.cacheManager.set(cacheKey, notifications, 300_000);
-    return notifications;
   }
 
-  /**
-   * Get unread count (cached)
-   */
   async getUnreadCount(userId: string) {
-    const value = await this.cacheManager.get<number>(this.unreadKey(userId));
-    return value || 0;
+    return this.notificationModel.countDocuments({ userId, isRead: false });
   }
 
   /**
@@ -148,15 +126,6 @@ export class NotificationsService {
       notif.isRead = true;
       notif.readAt = new Date();
       await notif.save();
-
-      const current =
-        (await this.cacheManager.get<number>(this.unreadKey(String(notif.userId)))) || 1;
-
-      await this.cacheManager.set(
-        this.unreadKey(String(notif.userId)),
-        Math.max(current - 1, 0),
-        3_600_000,
-      );
     }
 
     return notif;
@@ -171,8 +140,6 @@ export class NotificationsService {
       { isRead: true, readAt: new Date() },
     );
 
-    await this.cacheManager.set(this.unreadKey(userId), 0, 3_600_000);
-
     return { message: 'All notifications marked as read' };
   }
 
@@ -184,6 +151,11 @@ export class NotificationsService {
 
     await notif.deleteOne();
     return { message: 'Notification deleted' };
+  }
+
+  async clearAll(userId: string) {
+    const { deletedCount } = await this.notificationModel.deleteMany({ userId });
+    return { deletedCount };
   }
 
   private async getOwnedNotification(notificationId: string, userId: string) {

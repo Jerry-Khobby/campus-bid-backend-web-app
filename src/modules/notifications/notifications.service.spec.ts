@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 
@@ -15,7 +14,6 @@ describe('NotificationsService', () => {
   let notificationModel: any;
   let userModel: any;
   let vendorModel: any;
-  let cacheManager: any;
   let gateway: any;
 
   const userId = new Types.ObjectId().toString();
@@ -26,15 +24,11 @@ describe('NotificationsService', () => {
     notificationModel.find = jest.fn();
     notificationModel.findById = jest.fn();
     notificationModel.updateMany = jest.fn();
+    notificationModel.countDocuments = jest.fn();
+    notificationModel.deleteMany = jest.fn();
 
     userModel = { exists: jest.fn() };
     vendorModel = { exists: jest.fn() };
-
-    cacheManager = {
-      get: jest.fn(),
-      set: jest.fn(),
-      del: jest.fn(),
-    };
 
     gateway = { sendToUser: jest.fn() };
 
@@ -44,7 +38,6 @@ describe('NotificationsService', () => {
         { provide: getModelToken(Notification.name), useValue: notificationModel },
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: getModelToken(Vendor.name), useValue: vendorModel },
-        { provide: CACHE_MANAGER, useValue: cacheManager },
         { provide: NotificationsGateway, useValue: gateway },
       ],
     }).compile();
@@ -55,7 +48,6 @@ describe('NotificationsService', () => {
   describe('create', () => {
     it('creates a notification for an existing customer', async () => {
       userModel.exists.mockResolvedValue(true);
-      cacheManager.get.mockResolvedValue(0);
       notificationModel.create.mockResolvedValue({ _id: '1', userId });
 
       const result = await service.create({
@@ -80,7 +72,6 @@ describe('NotificationsService', () => {
 
     it('creates a notification for an existing admin', async () => {
       userModel.exists.mockResolvedValue(true);
-      cacheManager.get.mockResolvedValue(0);
       notificationModel.create.mockResolvedValue({ _id: '1', userId });
 
       await service.create({
@@ -110,7 +101,6 @@ describe('NotificationsService', () => {
         lean: jest.fn().mockResolvedValue(adminIds.map((id) => ({ _id: id }))),
       });
       userModel.exists.mockResolvedValue(true);
-      cacheManager.get.mockResolvedValue(0);
       notificationModel.create.mockImplementation((data: any) => Promise.resolve({ _id: 'n', ...data }));
 
       await service.notifyAllAdmins('payment_disputed', 'Title', 'Message', { paymentId: 'p1' });
@@ -137,7 +127,6 @@ describe('NotificationsService', () => {
   describe('notify', () => {
     it('creates a notification and pushes it to the user over the gateway', async () => {
       userModel.exists.mockResolvedValue(true);
-      cacheManager.get.mockResolvedValue(0);
       const created = { _id: '1', userId };
       notificationModel.create.mockResolvedValue(created);
 
@@ -161,11 +150,10 @@ describe('NotificationsService', () => {
       await expect(service.markAsRead('id-1', userId)).rejects.toThrow(ForbiddenException);
     });
 
-    it('marks an unread notification as read and decrements the unread count', async () => {
+    it('marks an unread notification as read', async () => {
       const save = jest.fn().mockResolvedValue(true);
       const notif = { isRead: false, userId, save };
       notificationModel.findById.mockResolvedValue(notif);
-      cacheManager.get.mockResolvedValue(1);
 
       await service.markAsRead('id-1', userId);
 
@@ -197,6 +185,49 @@ describe('NotificationsService', () => {
       await service.deleteNotification('id-1', userId);
 
       expect(deleteOne).toHaveBeenCalled();
+    });
+  });
+
+  describe('listUserNotifications', () => {
+    it("reads the user's newest notifications from the database every time", async () => {
+      const exec = jest.fn().mockResolvedValue([{ _id: 'n1' }]);
+      const chain = { sort: jest.fn().mockReturnThis(), limit: jest.fn().mockReturnThis(), lean: jest.fn().mockReturnThis(), exec };
+      notificationModel.find.mockReturnValue(chain);
+
+      await service.listUserNotifications(userId);
+      await service.listUserNotifications(userId);
+
+      expect(notificationModel.find).toHaveBeenCalledTimes(2);
+      expect(notificationModel.find).toHaveBeenCalledWith({ userId });
+    });
+  });
+
+  describe('getUnreadCount', () => {
+    it("counts the user's unread notifications", async () => {
+      notificationModel.countDocuments.mockResolvedValue(3);
+
+      await expect(service.getUnreadCount(userId)).resolves.toBe(3);
+      expect(notificationModel.countDocuments).toHaveBeenCalledWith({ userId, isRead: false });
+    });
+  });
+
+  describe('markAllAsRead', () => {
+    it("marks only the user's unread notifications as read", async () => {
+      await service.markAllAsRead(userId);
+
+      expect(notificationModel.updateMany).toHaveBeenCalledWith(
+        { userId, isRead: false },
+        expect.objectContaining({ isRead: true }),
+      );
+    });
+  });
+
+  describe('clearAll', () => {
+    it("deletes only the user's notifications and reports how many", async () => {
+      notificationModel.deleteMany.mockResolvedValue({ deletedCount: 4 });
+
+      await expect(service.clearAll(userId)).resolves.toEqual({ deletedCount: 4 });
+      expect(notificationModel.deleteMany).toHaveBeenCalledWith({ userId });
     });
   });
 });
