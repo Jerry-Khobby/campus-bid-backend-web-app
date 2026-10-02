@@ -75,8 +75,9 @@ Collection: `vendors` (Mongoose model `Vendor`, `{ timestamps: true }`).
 | Field | Type | Notes |
 |---|---|---|
 | `accountName` | String | optional |
-| `accountNumber` | String | optional |
-| `bankName` | String | optional |
+| `accountNumber` | String | optional — doubles as the mobile money phone number when `momoProvider` is set |
+| `bankName` | String | optional, legacy free text — no longer used for payouts (kept for backward compatibility with existing records) |
+| `momoProvider` | enum `mtn` \| `vod` \| `atl` | optional — the actual payout destination for admin-approved transfers, same provider codes already used for customer mobile money charges (`docs/payments.md`); an admin cannot approve a payout until a vendor has set `accountName`, `accountNumber`, **and** `momoProvider` |
 | `isVerified` | Boolean | default `false` |
 
 **Indexes:**
@@ -95,17 +96,17 @@ Public routes: `register`, `login`, `GET /vendors` (search/browse), `GET /vendor
 ### Registration & Login
 
 #### `POST /api/vendors/register`
-- **Auth:** public
-- **Request:** `multipart/form-data` — `logo` (optional file) + `CreateVendorDto`: `email` (required), `password` (required, strong-password rules), `profile` (required nested object: `businessName` required, `phoneNumber` required, `ownerName`/`description`/`logo`/`banner` optional), `categories` (optional string array)
-- **Response:** `{ success: true, message: "Vendor registered successfully", vendor: SafeVendor, accessToken, refreshToken }`
+- **Auth:** public, rate-limited
+- **Request:** `multipart/form-data` — `logo` (optional file, validated by `IMAGE_UPLOAD_OPTIONS`: jpeg/png/webp only, 5MB max — see `docs/architecture.md`) + `CreateVendorDto`: `email` (required), `password` (required, strong-password rules), `profile` (required nested object: `businessName` required, `phoneNumber` required, `ownerName`/`description`/`logo`/`banner` optional), `categories` (optional string array)
+- **Response:** `{ success: true, message: "Vendor registered successfully. An admin must approve the account before you can sign in.", vendor: SafeVendor }` — **no longer returns `accessToken`/`refreshToken`.** A newly-registered vendor starts `isActive: false` and can't actually sign in yet (see `docs/architecture.md`'s live account-status check), so issuing tokens at registration time was misleading; the vendor must wait for admin approval and then log in normally.
 - **Errors:** 409 `ConflictException` if email already registered; 500 if the save fails
 - `role` is forced to `"vendor"` server-side (ignores any client-supplied value, since `CreateVendorDto` doesn't even expose `role`). If a `logo` file is uploaded it takes precedence over `profile.logo` from the body.
 
 #### `POST /api/vendors/login`
-- **Auth:** public
+- **Auth:** public, rate-limited (`SENSITIVE_THROTTLE` — see `docs/architecture.md`)
 - **Request:** `VendorLoginDto` — `email`, `password` (both required, strong-password rules)
 - **Response:** `{ success: true, message: "Login successful", vendor: SafeVendor, accessToken, refreshToken }`
-- **Errors:** 404 `NotFoundException` if no vendor with that email; 401 if the account has no password (OAuth-only) or password mismatch
+- **Errors:** `401 UnauthorizedException("Invalid email or password")` for **all** of: unknown email, a Google-only account (no password), or a wrong password — these used to return different statuses/messages (404 vs 401 vs 401), which let a caller enumerate which vendor emails exist; now `isPasswordCorrect` always runs a `bcrypt.compare` against either the real hash or a cached dummy hash of the same cost, so the response takes the same time either way. A vendor with `isActive: false` (pending approval, or suspended) gets `403 ForbiddenException` with an explicit message distinguishing the two cases, after the password check succeeds.
 
 #### `POST /api/vendors/refresh`
 - **Auth:** `RefreshTokenGuard` + `@Roles("vendor")`
@@ -119,23 +120,24 @@ Public routes: `register`, `login`, `GET /vendors` (search/browse), `GET /vendor
 ### Password Management
 
 #### `POST /api/vendors/change-password`
-- **Auth:** authenticated (`vendor`)
+- **Auth:** authenticated (`vendor`), rate-limited
 - **Request:** `ChangePasswordDto` (reused from the Users module) — `oldPassword`, `newPassword`
 - **Response:** `{ success: true, message: "Password changed successfully" }`
 - **Errors:** 404 if vendor not found; 401 if OAuth-only account or old password mismatch
+- Also clears the stored `refreshToken` hash, ending every existing session on this account — including a session an attacker who had the old password might already hold.
 
 #### `POST /api/vendors/forgot-password`
-- **Auth:** public
+- **Auth:** public, rate-limited
 - **Request:** `ForgotPasswordDto` — `email`
-- **Response:** `{ success: true, message: "Password reset link sent", resetToken }`
-- **Errors:** 404 if no vendor matches; 500 if email send fails
-- Same pattern as Users: raw `resetToken` (32-byte hex) is returned in the response body in addition to being emailed, cached for 15 minutes under `vendor-reset:<token>`.
+- **Response:** `{ success: true, message: "If a vendor account exists for this email, a password reset link has been sent" }` — **always** this response, whether or not the email matches a vendor, so this endpoint can't be used to enumerate vendor accounts. The raw `resetToken` is no longer returned in the body (see Business Rules) — it only ever reaches the vendor via the emailed link. Email sending happens without blocking the response (fire-and-forget), so a known email isn't measurably slower to respond to than an unknown one.
+- Reset link points at `${VENDOR_APP_URL}/vendor/reset-password?token=...`.
 
 #### `POST /api/vendors/reset-password`
-- **Auth:** public
+- **Auth:** public, rate-limited
 - **Request:** `ResetPasswordDto` — `token`, `newPassword`
 - **Response:** `{ success: true, message: "Password reset successfully" }`
 - **Errors:** 401 if token invalid/expired; 404 if vendor no longer exists
+- Also clears the stored `refreshToken` hash (same reasoning as change-password).
 
 ### Profile
 
@@ -180,10 +182,10 @@ Public routes: `register`, `login`, `GET /vendors` (search/browse), `GET /vendor
 
 #### `PUT /api/vendors/bank-details`
 - **Auth:** authenticated (`vendor`)
-- **Request:** `UpdateBankDetailsDto` — all optional: `accountName`, `accountNumber`, `bankName`, `isVerified`
+- **Request:** `UpdateBankDetailsDto` — all optional: `accountName`, `accountNumber` (validated as a Ghanaian phone number, `/^0\d{9}$/`, when present), `bankName` (legacy, unused by payouts), `momoProvider` (`mtn`\|`vod`\|`atl`), `isVerified`
 - **Response:** `{ success: true, message: "Bank details updated successfully", bankDetails: BankDetails }`
 - **Errors:** 404 if not found
-- **Note:** a vendor can set `isVerified: true` on their own bank details via this endpoint — there is no separate admin-only verification gate in this module's code.
+- **Note:** a vendor can set `isVerified: true` on their own bank details via this endpoint — there is no separate admin-only verification gate in this module's code. Setting `momoProvider`/`accountName`/`accountNumber` is what makes the vendor eligible for an admin to actually approve their next payout (see `docs/payments.md`).
 
 ### Public Discovery
 
@@ -270,9 +272,8 @@ Public routes: `register`, `login`, `GET /vendors` (search/browse), `GET /vendor
 
 #### `GET /api/vendors/google/callback`
 - **Auth:** public entry point guarded by `AuthGuard('google')`
-- **Response:** **none/undefined.** `VendorService.handleGoogleLogin` finds-or-creates the vendor record but has no `return` statement — the controller method returns whatever the service resolves to, which is `undefined`. This means the vendor google callback currently sends an empty response body and **never issues JWTs**, unlike the equivalent Users module flow which does. This is a functional gap, not a documentation nuance — the Swagger example on this route (in the source) shows a `{ success, user, accessToken, refreshToken }` shape that the code does not actually produce.
-- **Errors:** 500 `InternalServerErrorException` if Google doesn't supply an email.
-- On first login it creates a vendor with `authProvider: 'google'`, `role: 'vendor'`, `isVerified: true`, `profile.businessName` set to `"<firstName> <lastName>"`, `profile.logo` from the Google photo (or `null`), and `profile.phoneNumber` set to `""` (the schema requires `phoneNumber`, so this satisfies validation with an empty string). If a `local` vendor with that email already exists without `oauth.googleId`, it is upgraded in place the same way as the Users module. Like local registration, this never sets `isActive` explicitly, so a Google-created vendor also starts pending admin approval.
+- **Response:** **HTTP 302 redirect**, not a JSON body — the browser is mid-redirect from Google and can't read a JSON response here. On success: `${VENDOR_APP_URL}/auth/google/callback?accessToken=...&refreshToken=...`. On failure: `${VENDOR_APP_URL}/auth/google/callback?error=<message>` — with `&email=<email>` appended **only** when the failure was specifically "no vendor account exists for this email" (`NotFoundException`), so the frontend can offer to pre-fill a sign-up form; a pending or suspended vendor's error redirects without the email param and stays on the sign-in page instead.
+- **Vendors do not auto-create on Google login.** `handleGoogleLogin` throws `NotFoundException` for an email with no existing vendor record — a vendor must already exist (via `POST /vendors/register`) before Google sign-in will work for it. If a `local` vendor with that email exists without `oauth.googleId` yet, it's upgraded in place (`oauth.googleId` set, `authProvider: 'google'`), same as the Users module; the vendor's `isActive` status is checked the same way as local login (see `POST /api/vendors/login` above) before tokens are issued.
 
 ### Admin
 Vendors always self-register (there is no admin-create-vendor endpoint); these three routes let an admin review and gate that self-service pipeline. All three require `@Roles("admin")` — a `User` document (not `Vendor`) with `role: "admin"`, obtained by logging in via `POST /users/login`. See `docs/users.md` for how an account gets promoted to admin (there is no public way to self-register as one).
@@ -296,8 +297,10 @@ Vendors always self-register (there is no admin-create-vendor endpoint); these t
 - Sets `isActive: false`, the same flag a brand-new pending vendor has — a suspended vendor and a not-yet-approved vendor are indistinguishable by this field alone; both simply don't appear publicly until approved again.
 
 ## Business Rules & Notes
-- **Google OAuth callback is broken (functional gap):** as detailed above, `POST/GET /api/vendors/google/callback` never returns tokens or a body — a vendor cannot actually complete sign-in through this route today, even though the Swagger annotation implies it works exactly like the Users module's version.
 - **Response shape is consistent** within this module — essentially every endpoint returns `{ success, message, <dataKey> }` (`vendor`, `data`, `location`, `businessHours`, `bankDetails`, `tokens`), unlike the Users module which has a few unwrapped/inconsistent returns.
+- **Live account-status check, not just a login-time gate:** an existing access token for a suspended/deactivated vendor stops working within 30 seconds of the admin flipping `isActive`, not just at the token's natural 15-minute expiry — see `docs/architecture.md`. Admin approve/suspend now also explicitly evicts that cache entry (`cacheManager.del`) rather than waiting out the TTL.
+- **Session revocation on password change:** `change-password` and `reset-password` both clear the stored `refreshToken` hash, so any refresh token issued before the change (including one an attacker might hold) stops working immediately; the vendor must log in again.
+- **No account enumeration via auth routes:** login and forgot-password both give identical responses regardless of whether the email exists — see the endpoint descriptions above.
 - **Unused DTO:** `VendorResponseDto` (`dto/vendor-response.dto.ts`, a `class-transformer` `@Exclude`/`@Expose` DTO) is not referenced anywhere in the controller or service — the actual serialization is done ad hoc via `VendorService.excludePassword`, which strips `password` and `refreshToken` (unlike the Users module's `excludePassword`, which strips only `password` and leaves `refreshToken` in the payload).
 - **`stats` is dead data:** `Vendor.stats` (`totalOrders`, `completedOrders`, `totalRevenue`) is defined on the schema and exposed in `toPublicVendor`, but nothing in this module ever writes to it — dashboard/analytics figures are computed live from the `orders` collection instead, so `stats` will always read as its zero defaults unless some other module updates it (not found in this codebase's Vendors/Products/Orders code searched).
 - **Cache refresh is inconsistent:** `updateProfile`, `updateLocation`, `updateBusinessHours`, and `updateBankDetails` all call `refreshVendorCache` after saving, but `updateLogo` and `updateBanner` do not — a minor inconsistency versus the rest of the profile-mutation endpoints.
