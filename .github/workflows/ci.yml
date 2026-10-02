@@ -1,0 +1,84 @@
+name: CI
+
+# Runs on every push so problems surface before a PR exists, and on every PR
+# into master so branch protection can require these checks before merging.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch supersedes the running check, except on
+# master, where every commit that reaches production is verified to the end.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  verify:
+    name: Typecheck, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Unit specs mock every model and external service, so no database or
+      # secrets are needed. The e2e suite boots the real app and is not run here.
+      - name: Unit tests
+        run: npm test -- --ci
+
+      - name: Build
+        run: npm run build
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Fail on high or critical advisories in production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  # Report-only until the existing no-unsafe-* backlog (untyped `any` values)
+  # is cleared; then drop continue-on-error and make this check required.
+  lint:
+    name: Lint (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        continue-on-error: true
+        run: npx eslint "{src,test}/**/*.ts"
