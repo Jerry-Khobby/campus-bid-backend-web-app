@@ -15,6 +15,7 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -26,9 +27,12 @@ import { AcceptOrderDto } from './dto/accept-order.dto';
 import { RejectOrderDto } from './dto/reject-order.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { MarkDeliveredDto } from './dto/mark-delivered.dto';
+import { OpenDisputeDto } from './dto/open-dispute.dto';
+import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
+import { SENSITIVE_THROTTLE } from 'src/common/throttle/throttle.config';
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -65,8 +69,8 @@ export class OrdersController {
   @Roles('vendor')
   @Patch(':id/update')
   @ApiBearerAuth()
-  async updateOrder(@Param('id') id: string, @Body() dto: UpdateOrderDto) {
-    const data = await this.ordersService.updateOrder(id, dto);
+  async updateOrder(@Request() req, @Param('id') id: string, @Body() dto: UpdateOrderDto) {
+    const data = await this.ordersService.updateOrder(id, req.user.sub, dto);
     return { success: true, message: 'Order updated successfully', data };
   }
 
@@ -90,6 +94,26 @@ export class OrdersController {
   async cancelOrder(@Request() req, @Param('id') id: string, @Body() dto: CancelOrderDto) {
     const data = await this.ordersService.cancelOrder(id, req.user.sub, dto);
     return { success: true, message: 'Order cancelled successfully', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('student')
+  @Post(':id/dispute')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Report a problem with a delivered order; the payment stays held until an admin resolves it' })
+  async openDispute(@Request() req, @Param('id') id: string, @Body() dto: OpenDisputeDto) {
+    const data = await this.ordersService.openDispute(id, req.user.sub, dto);
+    return { success: true, message: 'Dispute submitted for review', data };
+  }
+
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Roles('admin')
+  @Patch(':id/dispute/resolve')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Resolve a dispute by refunding the customer or releasing the payment to the vendor' })
+  async resolveDispute(@Request() req, @Param('id') id: string, @Body() dto: ResolveDisputeDto) {
+    const data = await this.ordersService.resolveDispute(id, req.user.sub, dto);
+    return { success: true, message: `Dispute resolved: ${dto.resolution}`, data };
   }
 
   @UseGuards(AccessTokenGuard, RolesGuard)
@@ -122,6 +146,7 @@ export class OrdersController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles('vendor')
   @Patch(':id/mark-delivered')
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   async markDelivered(@Request() req, @Param('id') id: string, @Body() dto: MarkDeliveredDto) {
     const data = await this.ordersService.markDelivered(id, req.user.sub, dto.deliveryCode);
@@ -131,6 +156,7 @@ export class OrdersController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles('student')
   @Post(':id/confirm-delivery')
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   async confirmDelivery(
     @Request() req,

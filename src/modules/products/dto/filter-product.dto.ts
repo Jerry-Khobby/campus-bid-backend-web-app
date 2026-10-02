@@ -1,6 +1,17 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsOptional, IsString, IsNumber, IsBoolean, Min } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, TransformFnParams, Type } from "class-transformer";
+
+const QUERY_BOOLEANS = new Map<unknown, boolean>([
+  ["true", true],
+  ["false", false],
+]);
+
+// Query strings arrive as text, so "true"/"false" are mapped to booleans and any
+// other value is passed through for @IsBoolean() to reject.
+function toQueryBoolean({ value }: TransformFnParams): unknown {
+  return QUERY_BOOLEANS.get(value) ?? value;
+}
 
 export class FilterProductDto {
   @ApiPropertyOptional({ description: "Search by name" })
@@ -20,11 +31,13 @@ export class FilterProductDto {
 
   @ApiPropertyOptional({ description: "Filter by product availability" })
   @IsOptional()
+  @Transform(toQueryBoolean)
   @IsBoolean()
-  isAvailable?: boolean; // ✅ Add this line
+  isAvailable?: boolean;
 
   @ApiPropertyOptional({ description: "Only flash sale products" })
   @IsOptional()
+  @Transform(toQueryBoolean)
   @IsBoolean()
   isFlashSale?: boolean;
 

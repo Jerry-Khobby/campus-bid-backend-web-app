@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import { Document, Types } from "mongoose";
+import { MomoProvider } from "../../payments/dto/initialize-payment.dto";
 
 /* --------------------------- Subschemas --------------------------- */
 
@@ -95,6 +96,13 @@ class BankDetails {
 
   @Prop()
   bankName?: string;
+
+  // Payout destination for the admin-approved mobile money transfer -
+  // accountNumber doubles as the momo phone number when this is set. Kept
+  // separate from bankName (legacy free text, no longer used for payouts)
+  // since Paystack's Transfer Recipient API needs this exact provider code.
+  @Prop({ type: String, enum: MomoProvider })
+  momoProvider?: MomoProvider;
 
   @Prop({ default: false })
   isVerified?: boolean;

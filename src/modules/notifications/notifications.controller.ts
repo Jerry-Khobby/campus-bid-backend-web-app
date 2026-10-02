@@ -1,7 +1,6 @@
-import { Controller, Get, Patch, Post, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Patch, Delete, Param, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
-import { CreateNotificationDto } from './dto/create-notifications.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 
 @ApiTags('Notifications')
@@ -10,13 +9,6 @@ import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly service: NotificationsService) {}
-
-  @Post()
-  @ApiOperation({ summary: 'Create a notification (system use)' })
-  async create(@Body() dto: CreateNotificationDto) {
-    const data = await this.service.create(dto);
-    return { success: true, message: 'Notification created', data };
-  }
 
   @Get()
   @ApiOperation({ summary: 'Get all notifications for the authenticated user' })
@@ -41,8 +33,8 @@ export class NotificationsController {
 
   @Patch(':id/read')
   @ApiOperation({ summary: 'Mark one notification as read' })
-  async markAsRead(@Param('id') id: string) {
-    const data = await this.service.markAsRead(id);
+  async markAsRead(@Param('id') id: string, @Request() req) {
+    const data = await this.service.markAsRead(id, req.user.sub);
     return { success: true, message: 'Notification marked as read', data };
   }
 

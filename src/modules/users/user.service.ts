@@ -33,6 +33,8 @@ import { MailService } from "../../utils/mail.service";
 import { ConfigService } from "@nestjs/config";
 import * as argon2 from "argon2";
 import { CloudinaryService } from "../uploads/cloudinary.service";
+import { getAccountStatusCacheKey } from "../../common/guards/account-status";
+import { isPasswordCorrect } from "./password-check";
 
 interface CacheUser {
   id: string;
@@ -52,7 +54,16 @@ export interface SafeUser {
   updatedAt?: Date;
 }
 
+const FORGOT_PASSWORD_RESPONSE = {
+  success: true,
+  message: "If an account exists for this email, a password reset link has been sent",
+};
 
+const INVALID_CREDENTIALS_MESSAGE = "Invalid email or password";
+const SUSPENDED_ACCOUNT_MESSAGE = "This account has been suspended";
+const RESET_TOKEN_BYTES = 32;
+const RESET_TOKEN_TTL_MS = 15 * 60 * 1000;
+const USER_CACHE_TTL_MS = 60 * 60 * 1000;
 
 @Injectable()
 export class UserService {
@@ -99,9 +110,9 @@ export class UserService {
     // Save user — role is intentionally never taken from the client; every
     // self-registration is a student, matching the schema default.
     const newUser = new this.userModel({
-      ...createUserDto,
       email,
       password: hashedPassword,
+      addresses: createUserDto.addresses,
       profile:{
         ...createUserDto.profile,
         profileImage: profileImageUrl||null,
@@ -162,26 +173,12 @@ export class UserService {
     loginDto: LoginDto
   ): Promise<{ user: SafeUser; accessToken: string; refreshToken: string }> {
     const email = loginDto.email.trim().toLowerCase();
-    const password = loginDto.password;
+    const user = await this.findUserForLogin(email);
 
-    // Try cache first
-    const cachedUser = await this.cacheManager.get<CacheUser>(`user:${email}`);
-    let user: UserDocument | null = null;
-
-    if (cachedUser) {
-      user = await this.userModel.findById(cachedUser.id);
-    } else {
-      user = await this.userModel.findOne({ email });
-    }
-
-    // Validate
-    if (!user) throw new NotFoundException("Invalid email or password");
-    if (!user.password) {
-  throw new UnauthorizedException("User does not have a password. Please login with Google.");
-    }
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) throw new UnauthorizedException("Invalid email or password");
-    if (!user.isActive) throw new ForbiddenException("This account has been suspended");
+    // One message for unknown emails, Google-only accounts and wrong passwords, so login can't enumerate accounts.
+    const isMatch = await isPasswordCorrect(user?.password, loginDto.password, this.SALT_ROUNDS);
+    if (!user || !isMatch) throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
+    this.assertAccountActive(user);
 
     // Generate tokens
     const tokens = await this.getTokens(user._id.toString(), user.email,user.role);
@@ -192,12 +189,22 @@ export class UserService {
       id: user._id.toString(),
       email: user.email,
     };
-    await this.cacheManager.set(`user:${email}`, cacheUser, 3_600_000);
+    await this.cacheManager.set(`user:${email}`, cacheUser, USER_CACHE_TTL_MS);
 
     const safeUser = this.excludePassword(user);
 
     this.logger.log(`User logged in successfully: ${email}`);
     return { user: safeUser, ...tokens };
+  }
+
+  private async findUserForLogin(email: string): Promise<UserDocument | null> {
+    const cachedUser = await this.cacheManager.get<CacheUser>(`user:${email}`);
+    if (cachedUser) return this.userModel.findById(cachedUser.id);
+    return this.userModel.findOne({ email });
+  }
+
+  private assertAccountActive(user: UserDocument): void {
+    if (!user.isActive) throw new ForbiddenException(SUSPENDED_ACCOUNT_MESSAGE);
   }
 
   //UPDATE PROFILE
@@ -416,8 +423,8 @@ export class UserService {
     const match = await bcrypt.compare(dto.oldPassword, user.password);
     if (!match) throw new UnauthorizedException("Old password is incorrect");
 
-    const hashed = await bcrypt.hash(dto.newPassword, this.SALT_ROUNDS);
-    user.password = hashed;
+    user.password = await bcrypt.hash(dto.newPassword, this.SALT_ROUNDS);
+    this.revokeRefreshToken(user);
     await user.save();
 
     this.logger.log(`Password changed for ${user.email}`);
@@ -425,15 +432,25 @@ export class UserService {
   }
 
   // FORGOT PASSWORD
+  // Same response whether or not the account exists, so this endpoint can't be used to enumerate emails.
   async forgotPassword(dto: ForgotPasswordDto) {
-    const email = dto.email.toLowerCase();
+    const email = dto.email.trim().toLowerCase();
     const user = await this.userModel.findOne({ email });
-    if (!user) throw new NotFoundException("No account found for this email");
+    if (user) await this.startPasswordReset(user);
 
-    const resetToken = randomBytes(32).toString("hex");
-    await this.cacheManager.set(`reset:${resetToken}`, user._id.toString(), 900_000); // 15min
+    return FORGOT_PASSWORD_RESPONSE;
+  }
 
-    const resetLink = `https://your-frontend-app.com/reset-password?token=${resetToken}`;
+  private async startPasswordReset(user: UserDocument): Promise<void> {
+    const resetToken = randomBytes(RESET_TOKEN_BYTES).toString("hex");
+    await this.cacheManager.set(`reset:${resetToken}`, user._id.toString(), RESET_TOKEN_TTL_MS);
+
+    // Not awaited: waiting on the mail server would make known emails measurably slower than unknown ones.
+    void this.sendResetEmail(user, resetToken);
+  }
+
+  private async sendResetEmail(user: UserDocument, resetToken: string): Promise<void> {
+    const resetLink = `${this.getResetPasswordUrl(user.role)}?token=${resetToken}`;
     const html = `
       <p>Hello ${user.profile?.firstName || "User"},</p>
       <p>You requested a password reset. Click below to set a new password:</p>
@@ -442,18 +459,19 @@ export class UserService {
     `;
 
     try {
-      await this.mailService.sendEmail(email, "Reset your password", html);
+      await this.mailService.sendEmail(user.email, "Reset your password", html);
+      this.logger.log(`Password reset link sent to ${user.email}`);
     } catch (err) {
-      this.logger.error(`Error sending reset email: ${err.message}`);
-      throw new InternalServerErrorException("Could not send reset email");
+      // The requester already has the generic reply; the unused token simply expires.
+      this.logger.error(`Password reset email to ${user.email} failed: ${err.message}`, err.stack);
     }
+  }
 
-    this.logger.log(`Password reset link sent to ${email}`);
-    return {
-      success: true,
-      message: "Password reset link sent to your email",
-      resetToken, // remove in production
-    };
+  private getResetPasswordUrl(role: string): string {
+    if (role === "admin") {
+      return `${this.configService.get<string>("ADMIN_APP_URL")}/admin/reset-password`;
+    }
+    return `${this.configService.get<string>("APP_URL")}/reset-password`;
   }
 
   // RESET PASSWORD
@@ -464,14 +482,19 @@ export class UserService {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException("User not found");
 
-    const hashed = await bcrypt.hash(dto.newPassword, this.SALT_ROUNDS);
-    user.password = hashed;
+    user.password = await bcrypt.hash(dto.newPassword, this.SALT_ROUNDS);
+    this.revokeRefreshToken(user);
     await user.save();
 
     await this.cacheManager.del(`reset:${dto.token}`);
     this.logger.log(`Password reset successful for ${user.email}`);
 
     return { success: true, message: "Password has been reset successfully" };
+  }
+
+  // A new password must end every existing session, including any an attacker holds.
+  private revokeRefreshToken(user: UserDocument): void {
+    user.refreshToken = undefined;
   }
 
   // GET USER PROFILE
@@ -529,6 +552,7 @@ export class UserService {
     const user = await this.userModel.findById(userId);
     if (!user || !user.refreshToken)
       throw new ForbiddenException("Access Denied");
+    this.assertAccountActive(user);
 
     const refreshTokenMatches = await argon2.verify(
       user.refreshToken,
@@ -542,10 +566,10 @@ export class UserService {
     return tokens;
   }
 
-  //  Helper: exclude password field
+  //  Helper: strip the password and refresh-token hashes from every response
   private excludePassword(user: UserDocument): SafeUser {
     const userObj = user.toObject ? user.toObject() : user;
-    const { password, ...rest } = userObj;
+    const { password, refreshToken, ...rest } = userObj;
     return rest as SafeUser;
   }
 
@@ -577,7 +601,7 @@ export class UserService {
     const orderTotals = await this.getOrderTotalsByCustomer(users.map((user) => user._id as Types.ObjectId));
 
     const items = users.map((user) => ({
-      ...this.excludeSensitiveFields(user),
+      ...this.excludePassword(user),
       ...(orderTotals.get(user._id.toString()) ?? { totalOrders: 0, totalSpent: 0 }),
     }));
 
@@ -614,14 +638,8 @@ export class UserService {
     const user = await this.userModel.findByIdAndUpdate(id, { isActive }, { new: true });
     if (!user) throw new NotFoundException("User not found");
 
-    return this.excludeSensitiveFields(user);
-  }
-
-  /** Like excludePassword, but also strips the refreshToken hash — used only for admin-facing responses. */
-  private excludeSensitiveFields(user: UserDocument): SafeUser {
-    const userObj = user.toObject ? user.toObject() : user;
-    const { password, refreshToken, ...rest } = userObj;
-    return rest as SafeUser;
+    await this.cacheManager.del(getAccountStatusCacheKey(user.role, id));
+    return this.excludePassword(user);
   }
 
 
@@ -640,6 +658,7 @@ export class UserService {
   let user = await this.userModel.findOne({ email });
 
   if (user) {
+    this.assertAccountActive(user);
     if (!user.oauth?.googleId) {
       user.oauth = { googleId: googleUser.googleId };
       user.authProvider = 'google';

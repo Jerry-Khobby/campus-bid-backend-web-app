@@ -12,6 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { Payment, PaymentDocument } from './schema/payment.schema';
 import { Order, OrderDocument } from '../orders/schema/order.schema';
+import { OrderStatus } from '../orders/dto/order-status.enum';
 import { PaystackService } from './paystack.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { PaymentMethod } from './dto/create-payment.dto';
@@ -20,11 +21,16 @@ import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { PaymentQueryDto } from './dto/payment-query.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PayoutsService } from './payouts.service';
 
 const ADMIN_COMMISSION_RATE = 0.1;
 const PESEWAS_PER_CEDI = 100;
 const DEFAULT_PAYSTACK_CALLBACK_URL = 'http://localhost:3000/api/payments/callback';
-const HANDLED_WEBHOOK_EVENTS = ['charge.success', 'charge.failed'];
+const HANDLED_CHARGE_EVENTS = ['charge.success', 'charge.failed'];
+const HANDLED_TRANSFER_EVENTS = ['transfer.success', 'transfer.failed', 'transfer.reversed'];
+const ADMIN_ROLE = 'admin';
+const NON_ADMIN_HIDDEN_FIELDS = '-gatewayResponse -metadata.refund';
+const REFUNDABLE_ORDER_STATUS = OrderStatus.CANCELLED;
 
 export interface CardPaymentResult {
   paymentId: Types.ObjectId;
@@ -44,6 +50,15 @@ export interface MobileMoneyPaymentResult {
 
 export type InitializePaymentResult = CardPaymentResult | MobileMoneyPaymentResult;
 
+export interface PaymentActor {
+  sub: string;
+  role: string;
+}
+
+// reconciliationPending is true when this read could not confirm a pending
+// payment with Paystack, so the client knows its status may be stale.
+export type PaymentView = Record<string, any> & { reconciliationPending: boolean };
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -56,6 +71,7 @@ export class PaymentsService {
     private readonly paystackService: PaystackService,
     private readonly configService: ConfigService,
     private readonly notificationsService: NotificationsService,
+    private readonly payoutsService: PayoutsService,
   ) {}
 
   // -----------------------------
@@ -133,10 +149,12 @@ export class PaymentsService {
   // SUBMIT MOBILE MONEY OTP (student)
   // -----------------------------
   async submitMomoOtp(paymentId: string, otp: string, actorId: string): Promise<{ status: string }> {
-    const payment = await this.findById(paymentId);
+    const payment = await this.findPaymentOrFail(paymentId);
 
     if (payment.customerId.toString() !== actorId)
       throw new ForbiddenException('You cannot act on this payment');
+
+    await this.reconcileIfPending(payment);
 
     if (payment.paymentMethod !== 'mobile_money' || payment.status !== 'pending')
       throw new ConflictException('This payment is not awaiting an OTP');
@@ -224,7 +242,12 @@ export class PaymentsService {
     if (!this.paystackService.verifyWebhookSignature(rawBody, signature))
       throw new UnauthorizedException('Invalid webhook signature');
 
-    if (!HANDLED_WEBHOOK_EVENTS.includes(event?.event)) return { received: true };
+    if (HANDLED_TRANSFER_EVENTS.includes(event?.event)) {
+      await this.payoutsService.reconcilePayoutByReference(event.data.reference);
+      return { received: true };
+    }
+
+    if (!HANDLED_CHARGE_EVENTS.includes(event?.event)) return { received: true };
 
     const payment = await this.paymentModel.findOne({ transactionId: event.data.reference });
     if (!payment) {
@@ -307,27 +330,64 @@ export class PaymentsService {
   }
 
   // -----------------------------
-  // FIND PAYMENT BY ID
+  // GET PAYMENT (customer, vendor or admin)
+  // -----------------------------
+  async getPaymentForActor(paymentId: string, actor: PaymentActor): Promise<PaymentView> {
+    const payment = await this.findPaymentOrFail(paymentId);
+
+    if (actor.role !== ADMIN_ROLE && !this.isPaymentParty(payment, actor.sub))
+      throw new ForbiddenException('You cannot view this payment');
+
+    const reconciliationPending = await this.reconcileIfPending(payment);
+    return this.toPaymentView(payment, actor.role, reconciliationPending);
+  }
+
+  // Raw Paystack data (customer, card authorization, refund internals) is
+  // for admins only.
+  private toPaymentView(payment: PaymentDocument, role: string, reconciliationPending: boolean): PaymentView {
+    const view = payment.toObject();
+
+    if (role !== ADMIN_ROLE) {
+      delete view.gatewayResponse;
+      if (view.metadata) delete view.metadata.refund;
+    }
+
+    return { ...view, reconciliationPending };
+  }
+
+  // -----------------------------
+  // FIND PAYMENT BY ID (internal and admin use)
   // -----------------------------
   async findById(paymentId: string): Promise<PaymentDocument> {
+    const payment = await this.findPaymentOrFail(paymentId);
+    await this.reconcileIfPending(payment);
+    return payment;
+  }
+
+  private async findPaymentOrFail(paymentId: string): Promise<PaymentDocument> {
     if (!Types.ObjectId.isValid(paymentId)) throw new BadRequestException('Invalid paymentId');
     const payment = await this.paymentModel.findById(paymentId);
     if (!payment) throw new NotFoundException('Payment not found');
-
-    // Self-heal: a client polling this endpoint (e.g. the checkout callback
-    // page) would otherwise be stuck on 'pending' forever if Paystack's
-    // webhook never arrives. Reconciliation failures here shouldn't break
-    // the read - the caller just sees the payment still pending and the next
-    // poll (or the webhook, if it does arrive) can resolve it instead.
-    if (payment.status === 'pending') {
-      try {
-        await this.reconcileWithPaystack(payment);
-      } catch (error) {
-        this.logger.warn(`Reconciliation failed for payment ${payment._id}: ${error.message}`);
-      }
-    }
-
     return payment;
+  }
+
+  // Self-heal: a client polling for a payment (e.g. the checkout callback
+  // page) would otherwise be stuck on 'pending' forever if Paystack's webhook
+  // never arrives. A failed check must not break the read, so it is logged as
+  // an error and reported back as "reconciliation pending" instead.
+  private async reconcileIfPending(payment: PaymentDocument): Promise<boolean> {
+    if (payment.status !== 'pending') return false;
+
+    try {
+      await this.reconcileWithPaystack(payment);
+      return false;
+    } catch (error) {
+      this.logger.error(
+        `Paystack reconciliation failed for payment ${payment._id} (ref ${payment.transactionId}); it stays pending: ${error.message}`,
+        error.stack,
+      );
+      return true;
+    }
   }
 
   // -----------------------------
@@ -361,13 +421,15 @@ export class PaymentsService {
   // -----------------------------
   async getPaymentHistory(userId: string, role: string): Promise<PaymentDocument[]> {
     const filter = this.buildHistoryFilter(userId, role);
-    return this.paymentModel.find(filter).sort({ createdAt: -1 });
+    const query = this.paymentModel.find(filter).sort({ createdAt: -1 });
+    return role === ADMIN_ROLE ? query : query.select(NON_ADMIN_HIDDEN_FIELDS);
   }
 
   private buildHistoryFilter(userId: string, role: string): Record<string, unknown> {
     if (role === 'student') return { customerId: userId };
     if (role === 'vendor') return { vendorId: userId };
-    return {};
+    if (role === ADMIN_ROLE) return {};
+    throw new ForbiddenException('You cannot view payment history');
   }
 
   // -----------------------------
@@ -384,10 +446,12 @@ export class PaymentsService {
   // RELEASE PAYMENT (customer confirms)
   // -----------------------------
   async releasePayment(paymentId: string, actorId: string): Promise<PaymentDocument> {
-    const payment = await this.findById(paymentId);
+    const payment = await this.findPaymentOrFail(paymentId);
 
     if (payment.customerId.toString() !== actorId)
       throw new ForbiddenException('You cannot release this payment');
+
+    await this.reconcileIfPending(payment);
 
     if (payment.status !== 'held')
       throw new ConflictException('Payment cannot be released in current state');
@@ -428,18 +492,50 @@ export class PaymentsService {
   }
 
   // -----------------------------
-  // REFUND PAYMENT
+  // REFUND PAYMENT (order cancellation / rejection flows in OrdersService)
   // -----------------------------
   async refundPayment(
     paymentId: string,
     dto: RefundPaymentDto,
     actorId: string,
   ): Promise<PaymentDocument> {
-    const payment = await this.findById(paymentId);
+    const payment = await this.findPaymentForRefund(paymentId, actorId);
+    return this.refundHeldPayment(payment, dto);
+  }
+
+  // -----------------------------
+  // REFUND PAYMENT (student route) - only once the order is already
+  // cancelled, e.g. to retry a refund that failed during cancellation.
+  // -----------------------------
+  async refundPaymentForCancelledOrder(
+    paymentId: string,
+    dto: RefundPaymentDto,
+    actorId: string,
+  ): Promise<PaymentDocument> {
+    const payment = await this.findPaymentForRefund(paymentId, actorId);
+    await this.assertOrderAllowsRefund(payment.orderId);
+    return this.refundHeldPayment(payment, dto);
+  }
+
+  private async findPaymentForRefund(paymentId: string, actorId: string): Promise<PaymentDocument> {
+    const payment = await this.findPaymentOrFail(paymentId);
 
     if (!this.isPaymentParty(payment, actorId))
       throw new ForbiddenException('You cannot refund this payment');
 
+    await this.reconcileIfPending(payment);
+    return payment;
+  }
+
+  private async assertOrderAllowsRefund(orderId: Types.ObjectId): Promise<void> {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status !== REFUNDABLE_ORDER_STATUS)
+      throw new ConflictException('Cancel the order to get a refund');
+  }
+
+  private async refundHeldPayment(payment: PaymentDocument, dto: RefundPaymentDto): Promise<PaymentDocument> {
     if (payment.status !== 'held')
       throw new ConflictException('Payment cannot be refunded in current state');
 
@@ -455,19 +551,22 @@ export class PaymentsService {
     await payment.save();
 
     this.logger.warn(`Payment ${payment._id} refunded for reason: ${dto.reason}`);
+    await this.notifyAdminsOfRefund(payment, dto.reason);
 
+    return payment;
+  }
+
+  private async notifyAdminsOfRefund(payment: PaymentDocument, reason: string): Promise<void> {
     try {
       await this.notificationsService.notifyAllAdmins(
         'payment_disputed',
         'Payment disputed',
-        `A payment was refunded following a customer dispute: ${dto.reason}`,
+        `A payment was refunded following a customer dispute: ${reason}`,
         { paymentId: (payment._id as Types.ObjectId).toString() },
       );
     } catch (error) {
       this.logger.warn(`Failed to notify admins of dispute for payment ${payment._id}`, error);
     }
-
-    return payment;
   }
 
   // -----------------------------

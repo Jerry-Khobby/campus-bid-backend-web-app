@@ -139,11 +139,10 @@ export class NotificationsService {
   }
 
   /**
-   * Mark one notification as read
+   * Mark one notification owned by the requesting user as read
    */
-  async markAsRead(notificationId: string) {
-    const notif = await this.notificationModel.findById(notificationId);
-    if (!notif) throw new NotFoundException('Notification not found');
+  async markAsRead(notificationId: string, userId: string) {
+    const notif = await this.getOwnedNotification(notificationId, userId);
 
     if (!notif.isRead) {
       notif.isRead = true;
@@ -181,14 +180,20 @@ export class NotificationsService {
    * Delete a notification owned by the requesting user
    */
   async deleteNotification(notificationId: string, userId: string) {
+    const notif = await this.getOwnedNotification(notificationId, userId);
+
+    await notif.deleteOne();
+    return { message: 'Notification deleted' };
+  }
+
+  private async getOwnedNotification(notificationId: string, userId: string) {
     const notif = await this.notificationModel.findById(notificationId);
     if (!notif) throw new NotFoundException('Notification not found');
 
     if (notif.userId.toString() !== userId) {
-      throw new ForbiddenException('You cannot delete this notification');
+      throw new ForbiddenException('You cannot access this notification');
     }
 
-    await notif.deleteOne();
-    return { message: 'Notification deleted' };
+    return notif;
   }
 }

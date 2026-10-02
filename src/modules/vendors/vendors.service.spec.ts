@@ -1,10 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
+import * as bcrypt from 'bcrypt';
 
 import { VendorService } from './vendors.service';
 import { Vendor } from './schema/vendor.schema';
@@ -25,6 +26,7 @@ describe('VendorService', () => {
   let payoutsService: any;
   let flashSaleService: any;
   let jwtService: any;
+  let mailService: any;
 
   const vendorId = new Types.ObjectId().toString();
 
@@ -55,20 +57,21 @@ describe('VendorService', () => {
   });
 
   beforeEach(async () => {
-    vendorModel = {
+    vendorModel = Object.assign(jest.fn(), {
       findById: jest.fn(),
       findOne: jest.fn(),
       find: jest.fn(),
       findByIdAndUpdate: jest.fn(),
       countDocuments: jest.fn(),
       aggregate: jest.fn(),
-    };
+    });
     productModel = { countDocuments: jest.fn(), find: jest.fn() };
     orderModel = { aggregate: jest.fn(), countDocuments: jest.fn(), find: jest.fn() };
     cacheManager = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
     payoutsService = { getVendorBalances: jest.fn() };
     flashSaleService = { getVendorFlashSales: jest.fn() };
     jwtService = { signAsync: jest.fn().mockResolvedValue('signed-token') };
+    mailService = { sendEmail: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -78,8 +81,8 @@ describe('VendorService', () => {
         { provide: getModelToken(Order.name), useValue: orderModel },
         { provide: JwtService, useValue: jwtService },
         { provide: CACHE_MANAGER, useValue: cacheManager },
-        { provide: MailService, useValue: { sendEmail: jest.fn() } },
-        { provide: ConfigService, useValue: { get: jest.fn() } },
+        { provide: MailService, useValue: mailService },
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('http://vendor.test') } },
         { provide: CloudinaryService, useValue: { uploadImage: jest.fn() } },
         { provide: ProductsService, useValue: { listProducts: jest.fn() } },
         { provide: FlashSaleService, useValue: flashSaleService },
@@ -271,7 +274,7 @@ describe('VendorService', () => {
     });
 
     it('links the Google account to an existing vendor on first OAuth login', async () => {
-      const vendor = buildVendorDoc({ oauth: undefined, save: jest.fn().mockResolvedValue(undefined) });
+      const vendor = buildVendorDoc({ oauth: undefined, isActive: true, save: jest.fn().mockResolvedValue(undefined) });
       vendorModel.findOne.mockResolvedValue(vendor);
       vendorModel.findByIdAndUpdate.mockResolvedValue(vendor);
 
@@ -285,13 +288,183 @@ describe('VendorService', () => {
     });
 
     it('logs in without re-linking when the vendor already has this Google account', async () => {
-      const vendor = buildVendorDoc({ oauth: { googleId: 'google-123' }, save: jest.fn() });
+      const vendor = buildVendorDoc({ oauth: { googleId: 'google-123' }, isActive: true, save: jest.fn() });
       vendorModel.findOne.mockResolvedValue(vendor);
       vendorModel.findByIdAndUpdate.mockResolvedValue(vendor);
 
       await service.handleGoogleLogin(googleUser);
 
       expect(vendor.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('never returns the reset token in the response', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc());
+
+      const result = await service.forgotPassword({ email: 'vendor@test.com' });
+
+      expect(result).not.toHaveProperty('resetToken');
+    });
+
+    it('returns the same response for an unknown email without sending mail', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc());
+      const knownEmailResult = await service.forgotPassword({ email: 'vendor@test.com' });
+      mailService.sendEmail.mockClear();
+      vendorModel.findOne.mockResolvedValue(null);
+
+      const unknownEmailResult = await service.forgotPassword({ email: 'nobody@test.com' });
+
+      expect(unknownEmailResult).toEqual(knownEmailResult);
+      expect(mailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('links vendors to the vendor app reset page', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc());
+
+      await service.forgotPassword({ email: 'vendor@test.com' });
+
+      expect(mailService.sendEmail.mock.calls[0][2]).toContain(
+        'http://vendor.test/vendor/reset-password?token=',
+      );
+    });
+  });
+
+  describe('forgotPassword delivery', () => {
+    it('responds without waiting for the email to be sent', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc());
+      mailService.sendEmail.mockReturnValue(new Promise(() => undefined));
+
+      await expect(service.forgotPassword({ email: 'vendor@test.com' })).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+    });
+
+    it('still returns the generic response when the email fails to send', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc());
+      mailService.sendEmail.mockRejectedValue(new Error('SMTP down'));
+
+      await expect(service.forgotPassword({ email: 'vendor@test.com' })).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+    });
+  });
+
+  describe('createVendor', () => {
+    const dto = {
+      email: 'New@Vendor.com',
+      password: 'StrongPass1!',
+      profile: { businessName: 'New Shop', phoneNumber: '0200000000' },
+    };
+
+    beforeEach(() => {
+      vendorModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+    });
+
+    it('issues no tokens, since a new vendor must be approved before signing in', async () => {
+      vendorModel.mockImplementation(() => buildVendorDoc({ save: jest.fn().mockResolvedValue(buildVendorDoc()) }));
+
+      const result = await service.createVendor(dto);
+
+      expect(Object.keys(result)).toEqual(['vendor']);
+    });
+  });
+
+  describe('loginVendor', () => {
+    const PASSWORD = 'StrongPass1!';
+    const TEST_SALT_ROUNDS = 4;
+    let passwordHash: string;
+
+    beforeAll(async () => {
+      passwordHash = await bcrypt.hash(PASSWORD, TEST_SALT_ROUNDS);
+    });
+
+    it('rejects an unknown email with the generic 401', async () => {
+      vendorModel.findOne.mockResolvedValue(null);
+
+      await expect(service.loginVendor({ email: 'nobody@test.com', password: PASSWORD })).rejects.toThrow(
+        new UnauthorizedException('Invalid email or password'),
+      );
+    });
+
+    it('rejects a wrong password with the same generic 401', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc({ password: passwordHash, isActive: true }));
+
+      await expect(service.loginVendor({ email: 'vendor@test.com', password: 'Wrong1!pass' })).rejects.toThrow(
+        new UnauthorizedException('Invalid email or password'),
+      );
+    });
+
+    it('rejects a Google-only vendor with the same generic 401', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc({ password: undefined, isActive: true }));
+
+      await expect(service.loginVendor({ email: 'vendor@test.com', password: PASSWORD })).rejects.toThrow(
+        new UnauthorizedException('Invalid email or password'),
+      );
+    });
+
+    it('rejects a pending or suspended vendor that knows its password', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc({ password: passwordHash, isActive: false }));
+
+      await expect(service.loginVendor({ email: 'vendor@test.com', password: PASSWORD })).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('signs in an active vendor', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc({ password: passwordHash, isActive: true }));
+
+      const result = await service.loginVendor({ email: 'vendor@test.com', password: PASSWORD });
+
+      expect(result.accessToken).toBe('signed-token');
+    });
+  });
+
+  describe('password changes revoke sessions', () => {
+    it('clears the stored refresh token on password reset', async () => {
+      const vendor = buildVendorDoc({ refreshToken: 'stored-refresh-hash' });
+      cacheManager.get.mockResolvedValue(vendorId);
+      vendorModel.findById.mockResolvedValue(vendor);
+
+      await service.resetPassword({ token: 'reset-token', newPassword: 'NewStrong1!' });
+
+      expect((vendor as any).refreshToken).toBeUndefined();
+    });
+
+    it('clears the stored refresh token on password change', async () => {
+      const vendor = buildVendorDoc({
+        password: await bcrypt.hash('OldStrong1!', 4),
+        refreshToken: 'stored-refresh-hash',
+      });
+      vendorModel.findById.mockResolvedValue(vendor);
+
+      await service.changePassword(vendorId, { oldPassword: 'OldStrong1!', newPassword: 'NewStrong1!' });
+
+      expect((vendor as any).refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('inactive vendors', () => {
+    it('cannot refresh tokens', async () => {
+      vendorModel.findById.mockResolvedValue(buildVendorDoc({ refreshToken: 'hash', isActive: false }));
+
+      await expect(service.refreshTokens(vendorId, 'refresh-token')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('cannot sign in with Google', async () => {
+      vendorModel.findOne.mockResolvedValue(buildVendorDoc({ oauth: { googleId: 'g-1' }, isActive: false }));
+
+      await expect(
+        service.handleGoogleLogin({ googleId: 'g-1', email: 'vendor@test.com', firstName: 'A', lastName: 'B' }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('lose live access-token sessions as soon as they are suspended', async () => {
+      vendorModel.findByIdAndUpdate.mockResolvedValue(buildVendorDoc({ role: 'vendor', isActive: false }));
+
+      await service.suspendVendor(vendorId);
+
+      expect(cacheManager.del).toHaveBeenCalledWith(`account-active:Vendor:${vendorId}`);
     });
   });
 });

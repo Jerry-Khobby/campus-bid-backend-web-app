@@ -44,6 +44,9 @@ import { CloudinaryService } from "../uploads/cloudinary.service";
 
 import {FileInterceptor} from "@nestjs/platform-express";
 import { UploadedFile,UseInterceptors } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { SENSITIVE_THROTTLE } from "src/common/throttle/throttle.config";
+import { IMAGE_UPLOAD_OPTIONS } from "src/common/uploads/image-upload.options";
 
 
 @ApiTags("Users")
@@ -57,7 +60,8 @@ export class UserController {
 
   // ✅ REGISTER
   @Post("register")
-  @UseInterceptors(FileInterceptor('profileImage'))
+  @Throttle(SENSITIVE_THROTTLE)
+  @UseInterceptors(FileInterceptor('profileImage', IMAGE_UPLOAD_OPTIONS))
   @ApiOperation({ summary: "Register a new user account" })
   @ApiBody({ type: CreateUserDto })
   @ApiResponse({ status: 201, description: "User registered successfully" })
@@ -74,6 +78,7 @@ export class UserController {
 
   // ✅ LOGIN
   @Post("login")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiOperation({ summary: "Login user and return JWT tokens" })
   @ApiBody({ type: LoginDto })
   @ApiResponse({ status: 200, description: "Login successful" })
@@ -106,6 +111,7 @@ export class UserController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("student", "admin")
   @Post("change-password")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Change user password" })
   @ApiBody({ type: ChangePasswordDto })
@@ -119,6 +125,7 @@ export class UserController {
 
   // ✅ FORGOT PASSWORD
   @Post("forgot-password")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiOperation({ summary: "Request password reset token" })
   @ApiBody({ type: ForgotPasswordDto })
   @ApiResponse({ status: 200, description: "Reset token sent to email" })
@@ -128,6 +135,7 @@ export class UserController {
 
   // ✅ RESET PASSWORD
   @Post("reset-password")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiOperation({ summary: "Reset password using reset token" })
   @ApiBody({ type: ResetPasswordDto })
   @ApiResponse({ status: 200, description: "Password reset successfully" })
@@ -156,7 +164,7 @@ export class UserController {
   @UseGuards(AccessTokenGuard, RolesGuard)
   @Roles("student", "admin")
   @Post("profile/image")
-  @UseInterceptors(FileInterceptor("profileImage"))
+  @UseInterceptors(FileInterceptor("profileImage", IMAGE_UPLOAD_OPTIONS))
   @ApiBearerAuth()
   @ApiOperation({ summary: "Upload/replace the user profile image" })
   @ApiResponse({ status: 200, description: "Profile image updated successfully" })
@@ -321,6 +329,7 @@ export class UserController {
   // ✅ REFRESH TOKENS
   @UseGuards(RefreshTokenGuard)
   @Post("refresh")
+  @Throttle(SENSITIVE_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Refresh expired access token" })
   @ApiResponse({ status: 200, description: "New tokens generated successfully" })
@@ -377,9 +386,16 @@ async googleCallback(@Req() req, @Res() res: Response) {
   // req.user comes from GoogleStrategy.validate(). The browser is mid-redirect
   // from Google, so the frontend can't read a JSON response here — hand the
   // tokens off via a redirect to a frontend page that stores them instead.
-  const { accessToken, refreshToken } = await this.userService.handleGoogleLogin(req.user);
   const appUrl = this.configService.get<string>('APP_URL') ?? 'http://localhost:5000';
-  res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+
+  try {
+    const { accessToken, refreshToken } = await this.userService.handleGoogleLogin(req.user);
+    res.redirect(`${appUrl}/auth/google/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+  } catch (error) {
+    // A suspended account must reach the login page with a reason, not a raw JSON error mid-redirect.
+    const message = error instanceof Error ? error.message : 'Google login failed';
+    res.redirect(`${appUrl}/auth/google/callback?error=${encodeURIComponent(message)}`);
+  }
 }
 
   // ✅ ADMIN — create a new admin account with a temp password

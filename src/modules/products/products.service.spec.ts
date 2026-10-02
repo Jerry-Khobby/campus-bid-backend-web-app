@@ -164,6 +164,54 @@ describe("ProductsService", () => {
     });
   });
 
+  describe("product list cache invalidation", () => {
+    it("rotates the list version when a product changes so cached lists are skipped", async () => {
+      const product = { vendorId, stock: 5, save: jest.fn().mockResolvedValue(true) };
+      productModel.findById.mockResolvedValue(product);
+
+      await service.updateStock(productId, vendorId, { stock: 20 });
+
+      expect(cacheManager.set).toHaveBeenCalledWith("products:list-version", expect.any(String), expect.any(Number));
+    });
+
+    it("issues a different version on every change", async () => {
+      const product = { vendorId, stock: 5, save: jest.fn().mockResolvedValue(true) };
+      productModel.findById.mockResolvedValue(product);
+
+      await service.updateStock(productId, vendorId, { stock: 20 });
+      await service.updateStock(productId, vendorId, { stock: 21 });
+
+      const versions = cacheManager.set.mock.calls
+        .filter(([key]: [string]) => key === "products:list-version")
+        .map(([, version]: [string, string]) => version);
+      expect(new Set(versions).size).toBe(2);
+    });
+  });
+
+  describe("assertVendorOwnsProduct", () => {
+    it("resolves for the owning vendor", async () => {
+      productModel.findById.mockResolvedValue({ vendorId });
+
+      await expect(service.assertVendorOwnsProduct(productId, vendorId)).resolves.toBeUndefined();
+    });
+
+    it("throws ForbiddenException for another vendor", async () => {
+      productModel.findById.mockResolvedValue({ vendorId: new Types.ObjectId().toString() });
+
+      await expect(service.assertVendorOwnsProduct(productId, vendorId)).rejects.toThrow(ForbiddenException);
+    });
+
+    it("throws NotFoundException when the product does not exist", async () => {
+      productModel.findById.mockResolvedValue(null);
+
+      await expect(service.assertVendorOwnsProduct(productId, vendorId)).rejects.toThrow(NotFoundException);
+    });
+
+    it("throws BadRequestException for a malformed product id", async () => {
+      await expect(service.assertVendorOwnsProduct("not-an-id", vendorId)).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe("getNearbyProducts", () => {
     it("returns paginated nearby products with the total count", async () => {
       const nearbyItem = { _id: productId, name: "Sandwich", distance: 120 };
@@ -228,6 +276,25 @@ describe("ProductsService", () => {
 
       expect(result.items[0].vendorName).toBeUndefined();
       expect(result.items[0].name).toBe("Beans");
+    });
+
+    it("keys cached lists by the current list version", async () => {
+      cacheManager.get.mockImplementation(async (key: string) => (key === "products:list-version" ? "v1" : undefined));
+      mockProductFind([]);
+      productModel.countDocuments.mockResolvedValue(0);
+
+      await service.listProducts({} as any);
+
+      expect(cacheManager.set).toHaveBeenCalledWith(expect.stringMatching(/^products:v1:/), expect.any(Object), expect.any(Number));
+    });
+
+    it("starts a new list version when none is cached yet", async () => {
+      mockProductFind([]);
+      productModel.countDocuments.mockResolvedValue(0);
+
+      await service.listProducts({} as any);
+
+      expect(cacheManager.set).toHaveBeenCalledWith("products:list-version", expect.any(String), expect.any(Number));
     });
 
     it("skips the vendor lookup entirely when the page has no products", async () => {

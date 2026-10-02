@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import axios from 'axios';
 import * as crypto from 'crypto';
 import { PaystackService } from './paystack.service';
@@ -150,6 +150,113 @@ describe('PaystackService', () => {
     });
   });
 
+  describe('createTransferRecipient', () => {
+    it('uppercases the momo provider code - Paystack rejects the lowercase charge-API code', async () => {
+      const recipientData = { recipient_code: 'RCP_abc123' };
+      mockedAxios.post.mockResolvedValue({ data: { data: recipientData } });
+
+      const result = await service.createTransferRecipient('Jane Vendor', '0551234987', 'mtn');
+
+      expect(result).toEqual(recipientData);
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'https://api.paystack.co/transferrecipient',
+        {
+          type: 'mobile_money',
+          name: 'Jane Vendor',
+          account_number: '0551234987',
+          bank_code: 'MTN',
+          currency: 'GHS',
+        },
+        { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
+      );
+    });
+
+    it('throws BadRequestException with a generic message for a non-gateway failure', async () => {
+      mockedAxios.post.mockRejectedValue(new Error('network down'));
+
+      await expect(
+        service.createTransferRecipient('Jane Vendor', '0551234987', 'mtn'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('surfaces Paystack\'s own validation message instead of a generic failure', async () => {
+      const axiosError = Object.assign(new Error('Request failed with status code 400'), {
+        isAxiosError: true,
+        response: { data: { message: 'Bank is invalid' } },
+      });
+      mockedAxios.post.mockRejectedValue(axiosError);
+      jest.spyOn(axios, 'isAxiosError').mockReturnValueOnce(true as any);
+
+      await expect(
+        service.createTransferRecipient('Jane Vendor', '0551234987', 'mtn'),
+      ).rejects.toThrow('Bank is invalid');
+    });
+  });
+
+  describe('initiateTransfer', () => {
+    it('sends the transfer request and returns the gateway status', async () => {
+      const transferData = { status: 'pending', transfer_code: 'TRF_abc', reference: 'ref123' };
+      mockedAxios.post.mockResolvedValue({ data: { data: transferData } });
+
+      const result = await service.initiateTransfer('RCP_abc123', 4500, 'ref123', 'CampusBid payout');
+
+      expect(result).toEqual(transferData);
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'https://api.paystack.co/transfer',
+        {
+          source: 'balance',
+          amount: 4500,
+          recipient: 'RCP_abc123',
+          reference: 'ref123',
+          reason: 'CampusBid payout',
+        },
+        { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
+      );
+    });
+
+    it('throws BadRequestException with a generic message for a non-gateway failure', async () => {
+      mockedAxios.post.mockRejectedValue(new Error('network down'));
+
+      await expect(
+        service.initiateTransfer('RCP_abc123', 4500, 'ref123', 'CampusBid payout'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('surfaces Paystack\'s own rejection reason, e.g. an account-tier restriction', async () => {
+      const axiosError = Object.assign(new Error('Request failed with status code 400'), {
+        isAxiosError: true,
+        response: { data: { message: 'You cannot initiate third party payouts as a starter business' } },
+      });
+      mockedAxios.post.mockRejectedValue(axiosError);
+      jest.spyOn(axios, 'isAxiosError').mockReturnValueOnce(true as any);
+
+      await expect(
+        service.initiateTransfer('RCP_abc123', 4500, 'ref123', 'CampusBid payout'),
+      ).rejects.toThrow('You cannot initiate third party payouts as a starter business');
+    });
+  });
+
+  describe('verifyTransfer', () => {
+    it('returns the transfer status on success', async () => {
+      const transferData = { status: 'success', transfer_code: 'TRF_abc', reference: 'ref123' };
+      mockedAxios.get.mockResolvedValue({ data: { data: transferData } });
+
+      const result = await service.verifyTransfer('ref123');
+
+      expect(result).toEqual(transferData);
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        'https://api.paystack.co/transfer/ref123',
+        { headers: { Authorization: `Bearer ${SECRET_KEY}` } },
+      );
+    });
+
+    it('throws InternalServerErrorException when the gateway call fails', async () => {
+      mockedAxios.get.mockRejectedValue(new Error('network down'));
+
+      await expect(service.verifyTransfer('ref123')).rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
   describe('verifyWebhookSignature', () => {
     it('returns true when the signature matches the computed hash', () => {
       const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success' }));
@@ -162,6 +269,19 @@ describe('PaystackService', () => {
       const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success' }));
 
       expect(service.verifyWebhookSignature(rawBody, 'invalid-signature')).toBe(false);
+    });
+
+    it('returns false for a same-length signature that differs', () => {
+      const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success' }));
+      const forgedSignature = crypto.createHmac('sha512', 'wrong-key').update(rawBody).digest('hex');
+
+      expect(service.verifyWebhookSignature(rawBody, forgedSignature)).toBe(false);
+    });
+
+    it('returns false when the signature is missing', () => {
+      const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success' }));
+
+      expect(service.verifyWebhookSignature(rawBody, undefined as unknown as string)).toBe(false);
     });
   });
 });

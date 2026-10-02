@@ -33,8 +33,7 @@ import { AccessTokenGuard } from "src/common/guards/jwt-access.guard";
 import { Roles } from "src/common/decorators/roles.decorator";
 import { RolesGuard } from "src/common/guards/roles.guard";
 import { CloudinaryService } from "../uploads/cloudinary.service";
-
-const MAX_PRODUCT_IMAGES = 10;
+import { IMAGE_UPLOAD_OPTIONS, MAX_IMAGES_PER_REQUEST } from "src/common/uploads/image-upload.options";
 
 @ApiTags("Products")
 @Controller("products")
@@ -153,7 +152,7 @@ export class ProductsController {
   @Post(":id/images")
   @ApiBearerAuth()
   @ApiConsumes("multipart/form-data")
-  @UseInterceptors(FilesInterceptor("images", MAX_PRODUCT_IMAGES))
+  @UseInterceptors(FilesInterceptor("images", MAX_IMAGES_PER_REQUEST, IMAGE_UPLOAD_OPTIONS))
   @ApiOperation({ summary: "Add images to an existing product (Vendor only)" })
   @ApiResponse({ status: 200, description: "Images added successfully" })
   async addProductImages(
@@ -163,6 +162,7 @@ export class ProductsController {
   ) {
     if (!images?.length) throw new BadRequestException("No image files provided");
 
+    await this.productsService.assertVendorOwnsProduct(productId, req.user.sub);
     const urls = await this.uploadImages(images);
     const result = await this.productsService.addProductImages(productId, req.user.sub, urls);
     return { success: true, message: "Images added successfully", images: result };

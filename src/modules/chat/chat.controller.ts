@@ -15,25 +15,27 @@ import {
   ApiOperation,
 } from '@nestjs/swagger';
 import { ChatService } from './chat.service';
+import { toChatParticipant } from './chat-participant';
 import { PredefinedMessageQueryDto } from './dto/predefined-message-query.dto';
+import { CreateConversationDto } from './dto/create-conversation.dto';
+import { MessagesPageQueryDto } from './dto/messages-page-query.dto';
 import { AccessTokenGuard } from 'src/common/guards/jwt-access.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
 
 @ApiTags('Chat')
 @ApiBearerAuth()
-@UseGuards(AccessTokenGuard) // 👈 protect entire controller
+@UseGuards(AccessTokenGuard, RolesGuard)
 @Controller('chat')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   @Post('conversations')
+  @Roles('student')
   @ApiOperation({ summary: 'Get or create chat conversation between customer and vendor' })
-  async getOrCreateConversation(
-    @Request() req,
-    @Body() body: { vendorId: string; orderId?: string },
-  ) {
-    const customerId = req.user.sub; // always from token
+  async getOrCreateConversation(@Request() req, @Body() body: CreateConversationDto) {
     const result = await this.chatService.getOrCreateConversation(
-      customerId,
+      req.user.sub,
       body.vendorId,
       body.orderId,
     );
@@ -43,8 +45,7 @@ export class ChatController {
   @Get('conversations')
   @ApiOperation({ summary: 'List conversations for the authenticated user' })
   async listConversations(@Request() req) {
-    const role = req.user.role === 'vendor' ? 'vendor' : 'student';
-    const data = await this.chatService.listConversations(req.user.sub, role);
+    const data = await this.chatService.listConversations(toChatParticipant(req.user));
     return { success: true, message: 'Conversations retrieved', data };
   }
 
@@ -57,32 +58,22 @@ export class ChatController {
 
   @Get('conversation/:id')
   @ApiOperation({ summary: 'Fetch conversation by ID' })
-  async getConversation(@Param('id') id: string) {
-    return {
-      success: true,
-      data: await this.chatService.getConversationById(id),
-    };
+  async getConversation(@Request() req, @Param('id') id: string) {
+    const data = await this.chatService.getConversationForParticipant(id, toChatParticipant(req.user));
+    return { success: true, data };
   }
 
   @Get('conversations/:id/messages')
   @ApiOperation({ summary: 'Get paginated messages' })
-  async getMessages(
-    @Param('id') id: string,
-    @Query('skip') skip = 0,
-    @Query('limit') limit = 30,
-  ) {
-    const data = await this.chatService.getMessages(id, Number(limit), Number(skip));
+  async getMessages(@Request() req, @Param('id') id: string, @Query() page: MessagesPageQueryDto) {
+    const data = await this.chatService.getMessages(id, toChatParticipant(req.user), page);
     return { success: true, data };
   }
 
   @Patch('read/:conversationId')
   @ApiOperation({ summary: 'Mark messages as read' })
-  async markAsRead(
-    @Request() req,
-    @Param('conversationId') conversationId: string,
-  ) {
-    const userType = req.user.role === 'vendor' ? 'vendor' : 'customer';
-    await this.chatService.markAsRead(conversationId, userType);
+  async markAsRead(@Request() req, @Param('conversationId') conversationId: string) {
+    await this.chatService.markAsRead(conversationId, toChatParticipant(req.user));
     return { success: true, message: 'Marked as read' };
   }
 }

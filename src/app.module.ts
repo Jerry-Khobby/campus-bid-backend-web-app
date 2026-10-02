@@ -19,10 +19,15 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
 import { SearchModule } from './modules/search/search.module';
 import { CloudinaryModule } from './modules/uploads/cloudinary.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { DEFAULT_THROTTLE, HttpThrottlerGuard } from './common/throttle/throttle.config';
+
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
     ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot(DEFAULT_THROTTLE),
     MongooseModule.forRoot(process.env.MONGODB_URI!),
     CacheModule.registerAsync(RedisOptions),
     UserModule,
@@ -40,6 +45,6 @@ import { AdminModule } from './modules/admin/admin.module';
     AdminModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, { provide: APP_GUARD, useClass: HttpThrottlerGuard }],
 })
 export class AppModule {}

@@ -21,7 +21,10 @@ export class CloudinaryService {
         },
       );
 
-      toStream(file.buffer).pipe(upload);
+      // An 'error' event with no listener is thrown as an uncaught exception and
+      // kills the whole process, so both ends of the pipe must reject instead.
+      upload.on('error', reject);
+      toStream(file.buffer).on('error', reject).pipe(upload);
     });
   }
 }

@@ -4,12 +4,12 @@ import {
   IsNumber,
   IsMongoId,
   IsDateString,
-  IsEnum,
   Min,
 } from 'class-validator';
 import { Types } from 'mongoose';
-import { FlashSaleStatus, FlashSaleReason } from './enums';
 
+// Bid state (currentBid, currentBidder, bids, winner) and lifecycle state (status,
+// reason) are server-controlled, so they are deliberately absent from client input.
 export class BaseFlashSaleDto {
   @IsMongoId()
   @IsNotEmpty()
@@ -24,14 +24,6 @@ export class BaseFlashSaleDto {
   @IsNotEmpty()
   @Min(0)
   startingBid: number;
-
-  @IsOptional()
-  @IsNumber()
-  currentBid?: number;
-
-  @IsOptional()
-  @IsMongoId()
-  currentBidder?: Types.ObjectId;
 
   @IsOptional()
   @IsNumber()
@@ -50,12 +42,4 @@ export class BaseFlashSaleDto {
   @IsDateString()
   @IsNotEmpty()
   endTime: Date;
-
-  @IsOptional()
-  @IsEnum(FlashSaleStatus)
-  status?: FlashSaleStatus;
-
-  @IsOptional()
-  @IsEnum(FlashSaleReason)
-  reason?: FlashSaleReason;
 }

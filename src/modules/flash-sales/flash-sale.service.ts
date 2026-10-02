@@ -9,8 +9,9 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { ProductsService } from '../products/products.service';
 import type { Cache } from 'cache-manager';
 import {
   CreateFlashSaleDto,
@@ -25,8 +26,26 @@ import {
   FlashSaleReason,
 } from './dto';
 import { FlashSale, FlashSaleDocument } from './schema/flash-sale.schema';
-import {Cron,CronExpression} from "@nestjs/schedule";
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { NotificationsService } from '../notifications/notifications.service';
+
+const SALE_CACHE_TTL_MS = 300_000;
+const DEFAULT_BID_INCREMENT = 1;
+
+// Mirrors assertBidMeetsMinimum inside MongoDB, so the check and the write happen
+// in one atomic operation and a concurrent higher bid can never be overwritten.
+const MINIMUM_NEXT_BID_EXPRESSION = {
+  $add: [
+    { $ifNull: ['$currentBid', '$startingBid'] },
+    { $ifNull: ['$minimumBidIncrement', DEFAULT_BID_INCREMENT] },
+  ],
+};
+
+interface Bid {
+  userId: Types.ObjectId;
+  amount: number;
+  timestamp: Date;
+}
 
 @Injectable()
 export class FlashSaleService {
@@ -38,25 +57,26 @@ export class FlashSaleService {
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
     private readonly notificationsService: NotificationsService,
+    private readonly productsService: ProductsService,
   ) {}
 
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async autoStartFlashSalesJob(): Promise<void> {
+    await this.autoStartFlashSales();
+  }
 
-  /// the cron job will come later 
-
-// @Cron('*/30 * * * * *') // every 30 seconds
-// async autoStartFlashSalesJob() {
-//   await this.autoStartFlashSales();
-// }
-
-// @Cron('0 */4 * * * *') // every minute
-// async autoEndFlashSalesJob() {
-//   await this.autoEndExpiredSales();
-// }
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async autoEndFlashSalesJob(): Promise<void> {
+    await this.autoEndExpiredSales();
+  }
 
   // -----------------------
   // CREATE FLASH SALE
   // -----------------------
-  async createFlashSale(vendorId:string,dto: CreateFlashSaleDto): Promise<FlashSaleDocument> {
+  async createFlashSale(vendorId: string, dto: CreateFlashSaleDto): Promise<FlashSaleDocument> {
+    this.assertValidSchedule(dto.startTime, dto.endTime);
+    await this.productsService.assertVendorOwnsProduct(String(dto.productId), vendorId);
+
     try {
       const flashSale = new this.flashSaleModel({
         ...dto,
@@ -65,8 +85,6 @@ export class FlashSaleService {
       });
 
       const saved = await flashSale.save();
-      await this.cacheManager.set(`flash-sale:${saved._id}`, saved, 600_000);
-
       this.logger.log(`✅ Flash sale created for product: ${dto.productId}`);
       return saved;
     } catch (error) {
@@ -100,7 +118,7 @@ export class FlashSaleService {
       .populate('vendorId productId currentBidder winner', '-password')
       .exec();
 
-    await this.cacheManager.set(cacheKey, sales, 300_000);
+    await this.cacheManager.set(cacheKey, sales, SALE_CACHE_TTL_MS);
     return sales;
   }
 
@@ -108,7 +126,7 @@ export class FlashSaleService {
   // GET FLASH SALE BY ID (CACHE FIRST)
   // -----------------------
   async getFlashSaleById(id: string): Promise<FlashSaleDocument> {
-    const cacheKey = `flash-sale:${id}`;
+    const cacheKey = this.saleCacheKey(id);
     const cached = await this.cacheManager.get<FlashSaleDocument>(cacheKey);
     if (cached) return cached;
 
@@ -119,59 +137,60 @@ export class FlashSaleService {
 
     if (!sale) throw new NotFoundException('Flash sale not found');
 
-    await this.cacheManager.set(cacheKey, sale, 300_000);
+    await this.cacheManager.set(cacheKey, sale, SALE_CACHE_TTL_MS);
     return sale;
   }
 
   // -----------------------
-  // UPDATE FLASH SALE
+  // UPDATE FLASH SALE (owner-only, while still upcoming)
   // -----------------------
-  async updateFlashSale(id: string, dto: UpdateFlashSaleDto): Promise<FlashSaleDocument> {
-    const sale = await this.flashSaleModel.findById(id);
-    if (!sale) throw new NotFoundException('Flash sale not found');
+  async updateFlashSale(id: string, vendorId: string, dto: UpdateFlashSaleDto): Promise<FlashSaleDocument> {
+    const sale = this.getSaleOrThrow(await this.flashSaleModel.findById(id));
+    this.assertVendorOwnsSale(sale, vendorId, 'update');
+    this.assertSaleIsUpcoming(sale);
+    this.assertValidSchedule(dto.startTime ?? sale.startTime, dto.endTime ?? sale.endTime);
 
-    Object.assign(sale, dto);
-    const updated = await sale.save();
+    const updated = await this.flashSaleModel.findOneAndUpdate(
+      { _id: id, status: FlashSaleStatus.UPCOMING },
+      { $set: dto },
+      { new: true },
+    );
+    if (!updated) throw new ConflictException('Flash sale has already started and can no longer be edited');
 
-    await this.cacheManager.set(`flash-sale:${id}`, updated, 600_000);
+    await this.evictSaleCache(id);
     this.logger.log(`🔄 Flash sale updated: ${id}`);
-
     return updated;
   }
 
-  // -----------------------
-  // PLACE BID (Atomic with Cache)
-  // -----------------------
-  async placeBid(flashSaleId: string, userId: string, dto: PlaceBidDto): Promise<FlashSaleDocument> {
-    const lockKey = `lock:flash-sale:${flashSaleId}`;
-    await this.acquireBidLock(lockKey);
-
-    try {
-      const sale = this.getSaleOrThrow(
-        await this.flashSaleModel.findById(flashSaleId).populate('productId', 'name'),
-      );
-      this.assertSaleIsActive(sale);
-      this.assertBidMeetsMinimum(sale, dto.amount);
-
-      const previousBidder = sale.currentBidder;
-      const previousBid = sale.currentBid;
-      this.applyBid(sale, userId, dto.amount);
-
-      const updated = await sale.save();
-      await this.cacheManager.set(`flash-sale:${flashSaleId}`, updated, 600_000);
-      await this.notifyOutbidUser(sale, previousBidder, previousBid, userId, dto.amount);
-
-      this.logger.log(`💰 New bid placed: ${dto.amount} by ${userId} on ${flashSaleId}`);
-      return updated;
-    } finally {
-      await this.cacheManager.del(lockKey);
-    }
+  private assertSaleIsUpcoming(sale: FlashSaleDocument) {
+    if (sale.status !== FlashSaleStatus.UPCOMING)
+      throw new ConflictException('Only upcoming flash sales can be edited');
   }
 
-  private async acquireBidLock(lockKey: string) {
-    const cachedLock = await this.cacheManager.get(lockKey);
-    if (cachedLock) throw new ForbiddenException('Bid is being processed, try again shortly');
-    await this.cacheManager.set(lockKey, 'locked', 5_000);
+  private assertValidSchedule(startTime: Date, endTime: Date) {
+    const start = new Date(startTime).getTime();
+    const end = new Date(endTime).getTime();
+    if (start >= end) throw new BadRequestException('startTime must be before endTime');
+    if (end <= Date.now()) throw new BadRequestException('endTime must be in the future');
+  }
+
+  // -----------------------
+  // PLACE BID (single atomic conditional update)
+  // -----------------------
+  async placeBid(flashSaleId: string, userId: string, dto: PlaceBidDto): Promise<FlashSaleDocument> {
+    const now = new Date();
+    const sale = this.getSaleOrThrow(await this.flashSaleModel.findById(flashSaleId));
+    this.assertSaleIsActive(sale);
+    this.assertWithinBiddingWindow(sale, now);
+    this.assertBidMeetsMinimum(sale, dto.amount);
+
+    const bid: Bid = { userId: new Types.ObjectId(userId), amount: dto.amount, timestamp: now };
+    const saleBeforeBid = await this.recordBidIfStillHighest(flashSaleId, bid);
+    await this.evictSaleCache(flashSaleId);
+    await this.notifyOutbidUser(saleBeforeBid, bid);
+
+    this.logger.log(`💰 New bid placed: ${dto.amount} by ${userId} on ${flashSaleId}`);
+    return this.applyBid(saleBeforeBid, bid);
   }
 
   private assertSaleIsActive(sale: FlashSaleDocument) {
@@ -179,28 +198,60 @@ export class FlashSaleService {
       throw new BadRequestException('Bidding is only allowed on active flash sales');
   }
 
+  // The status can lag the schedule by one cron tick, so the clock is authoritative.
+  private assertWithinBiddingWindow(sale: FlashSaleDocument, now: Date) {
+    if (now < new Date(sale.startTime)) throw new BadRequestException('This flash sale has not started yet');
+    if (now >= new Date(sale.endTime)) throw new BadRequestException('This flash sale has ended');
+  }
+
   private assertBidMeetsMinimum(sale: FlashSaleDocument, amount: number) {
-    const minAllowed = (sale.currentBid || sale.startingBid) + (sale.minimumBidIncrement || 1);
+    const minAllowed = this.getMinimumNextBid(sale);
     if (amount < minAllowed) throw new BadRequestException(`Bid must be at least ${minAllowed}`);
   }
 
-  private applyBid(sale: FlashSaleDocument, userId: string, amount: number) {
-    sale.currentBid = amount;
-    sale.currentBidder = new Types.ObjectId(userId);
-    sale.bids.push({ userId: new Types.ObjectId(userId), amount, timestamp: new Date() });
+  private getMinimumNextBid(sale: FlashSaleDocument): number {
+    return (sale.currentBid ?? sale.startingBid) + (sale.minimumBidIncrement ?? DEFAULT_BID_INCREMENT);
   }
 
-  private async notifyOutbidUser(
-    sale: FlashSaleDocument,
-    previousBidder: Types.ObjectId | undefined,
-    previousBid: number | undefined,
-    newBidderId: string,
-    newAmount: number,
-  ) {
-    if (!previousBidder || previousBidder.toString() === newBidderId) return;
+  // Returns the sale as it was just before this bid, so the outbid user is exactly
+  // the one this bid displaced, even when other bids land concurrently.
+  private async recordBidIfStillHighest(flashSaleId: string, bid: Bid): Promise<FlashSaleDocument> {
+    const saleBeforeBid = await this.flashSaleModel
+      .findOneAndUpdate(
+        this.buildOpenForBidFilter(flashSaleId, bid),
+        { $set: { currentBid: bid.amount, currentBidder: bid.userId }, $push: { bids: bid } },
+        { new: false },
+      )
+      .populate('productId', 'name');
 
-    const saleId = (sale._id as Types.ObjectId).toString();
-    const productName = (sale.productId as any)?.name || saleId;
+    if (!saleBeforeBid)
+      throw new ConflictException('A higher bid was placed or the sale closed first. Refresh and try again');
+    return saleBeforeBid;
+  }
+
+  private buildOpenForBidFilter(flashSaleId: string, bid: Bid): FilterQuery<FlashSaleDocument> {
+    return {
+      _id: flashSaleId,
+      status: FlashSaleStatus.ACTIVE,
+      startTime: { $lte: bid.timestamp },
+      endTime: { $gt: bid.timestamp },
+      $expr: { $lte: [MINIMUM_NEXT_BID_EXPRESSION, bid.amount] },
+    };
+  }
+
+  private applyBid(sale: FlashSaleDocument, bid: Bid): FlashSaleDocument {
+    sale.currentBid = bid.amount;
+    sale.currentBidder = bid.userId;
+    sale.bids.push(bid);
+    return sale;
+  }
+
+  private async notifyOutbidUser(saleBeforeBid: FlashSaleDocument, bid: Bid) {
+    const previousBidder = saleBeforeBid.currentBidder;
+    if (!previousBidder || previousBidder.toString() === bid.userId.toString()) return;
+
+    const saleId = (saleBeforeBid._id as Types.ObjectId).toString();
+    const productName = (saleBeforeBid.productId as any)?.name || saleId;
     try {
       await this.notificationsService.notify(
         previousBidder.toString(),
@@ -208,7 +259,7 @@ export class FlashSaleService {
         'flash_sale_alert',
         'Outbid!',
         `You've been outbid on ${productName}`,
-        { flashSaleId: saleId, currentBid: newAmount, yourBid: previousBid },
+        { flashSaleId: saleId, currentBid: bid.amount, yourBid: saleBeforeBid.currentBid },
       );
     } catch (error) {
       this.logger.error('Failed to send outbid notification', error);
@@ -228,7 +279,7 @@ export class FlashSaleService {
     sale.status = FlashSaleStatus.CANCELLED;
     sale.reason = dto.reason;
     const updated = await sale.save();
-    await this.cacheManager.set(`flash-sale:${flashSaleId}`, updated, 300_000);
+    await this.evictSaleCache(flashSaleId);
     return updated;
   }
 
@@ -250,7 +301,7 @@ export class FlashSaleService {
     sale.reason = FlashSaleReason.CLOSING_TIME;
 
     const updated = await sale.save();
-    await this.cacheManager.set(`flash-sale:${dto.flashSaleId}`, updated, 300_000);
+    await this.evictSaleCache(dto.flashSaleId.toString());
     await this.notifyWinner(updated);
     return updated;
   }
@@ -329,54 +380,71 @@ export class FlashSaleService {
       throw new ForbiddenException(`You are not authorized to ${action} this flash sale`);
   }
 
-
-///--------------------------
-// AUTO-START UPCOMING SALES 
-///
-
-
+  // -----------------------
+  // AUTO-START UPCOMING SALES (cron job)
+  // -----------------------
   async autoStartFlashSales(): Promise<number> {
-    const now = new Date();
-    const upcoming = await this.flashSaleModel.find({
-      status: FlashSaleStatus.UPCOMING,
-      startTime: { $lte: now },
-    });
+    const due = await this.flashSaleModel
+      .find({ status: FlashSaleStatus.UPCOMING, startTime: { $lte: new Date() } })
+      .select('_id');
+    if (due.length === 0) return 0;
 
-    let count = 0;
-    for (const sale of upcoming) {
-      sale.status = FlashSaleStatus.ACTIVE;
-      await sale.save();
-      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300_000);
-      count++;
-    }
+    const ids = due.map((sale) => sale._id as Types.ObjectId);
+    const result = await this.flashSaleModel.updateMany(
+      { _id: { $in: ids }, status: FlashSaleStatus.UPCOMING },
+      { $set: { status: FlashSaleStatus.ACTIVE } },
+    );
+    await Promise.all(ids.map((id) => this.evictSaleCache(id.toString())));
 
-    if (count > 0) this.logger.log(`🚀 Activated ${count} flash sales`);
-    return count;
+    this.logger.log(`🚀 Activated ${result.modifiedCount} flash sales`);
+    return result.modifiedCount;
   }
 
-
   // -----------------------
-  // AUTO-END EXPIRED SALES (cronjob hook)
+  // AUTO-END EXPIRED SALES (cron job)
   // -----------------------
   async autoEndExpiredSales(): Promise<number> {
-    const now = new Date();
     const expired = await this.flashSaleModel.find({
       status: FlashSaleStatus.ACTIVE,
-      endTime: { $lte: now },
+      endTime: { $lte: new Date() },
     });
 
     let count = 0;
     for (const sale of expired) {
-      sale.status = FlashSaleStatus.COMPLETED;
-      sale.reason = FlashSaleReason.CLOSING_TIME;
-      await sale.save();
-      await this.cacheManager.set(`flash-sale:${sale._id}`, sale, 300_000);
-      count++;
+      if (await this.endExpiredSale(sale)) count++;
     }
 
     if (count > 0) this.logger.log(`🕒 Auto-ended ${count} expired flash sales`);
     return count;
   }
 
+  // Bids are refused once endTime has passed, so the current highest bidder is final
+  // and becomes the winner. The status guard makes only one cron run end the sale.
+  private async endExpiredSale(sale: FlashSaleDocument): Promise<boolean> {
+    const saleId = (sale._id as Types.ObjectId).toString();
+    const ended = await this.flashSaleModel.findOneAndUpdate(
+      { _id: saleId, status: FlashSaleStatus.ACTIVE },
+      {
+        $set: {
+          status: FlashSaleStatus.COMPLETED,
+          reason: FlashSaleReason.CLOSING_TIME,
+          ...(sale.currentBidder && { winner: sale.currentBidder }),
+        },
+      },
+      { new: true },
+    );
+    if (!ended) return false;
 
+    await this.evictSaleCache(saleId);
+    await this.notifyWinner(ended);
+    return true;
+  }
+
+  private saleCacheKey(id: string): string {
+    return `flash-sale:${id}`;
+  }
+
+  private async evictSaleCache(id: string): Promise<void> {
+    await this.cacheManager.del(this.saleCacheKey(id));
+  }
 }

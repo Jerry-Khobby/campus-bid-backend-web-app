@@ -24,14 +24,6 @@ class AddressDto {
   @IsBoolean() @IsOptional() isDefault?: boolean;
 }
 
-class PaymentMethodDto {
-  @IsString() type: string; // 'card' | 'mobile_money'
-  @IsString() provider: string;
-  @IsString() last4: string;
-  @IsBoolean() @IsOptional() isDefault?: boolean;
-  @IsOptional() metadata?: Record<string, any>;
-}
-
 export class CreateUserDto {
   @IsEmail() email: string;
   @IsString() @MinLength(8) 
@@ -45,11 +37,6 @@ export class CreateUserDto {
   
   password: string;
 
-  @IsString()
-  refreshToken: string;
-
   @ValidateNested() @Type(() => ProfileDto) @IsOptional() profile?: ProfileDto;
   @ValidateNested({ each: true }) @Type(() => AddressDto) @IsOptional() addresses?: AddressDto[];
-  @IsArray() @IsOptional() savedItems?: string[];
-  @ValidateNested({ each: true }) @Type(() => PaymentMethodDto) @IsOptional() paymentMethods?: PaymentMethodDto[];
 }

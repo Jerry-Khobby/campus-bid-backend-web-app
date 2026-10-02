@@ -81,13 +81,15 @@ export class FlashSaleController {
     return { success: true, message: 'Flash sale fetched successfully', data };
   }
 
-  // UPDATE FLASH SALE
+  // UPDATE FLASH SALE (owning vendor, upcoming sales only)
   @UseGuards(AccessTokenGuard,RolesGuard)
   @Roles('vendor')
   @Patch(':id/update')
   @ApiBearerAuth()
-  async updateFlashSale(@Param('id') id: string, @Body() dto: UpdateFlashSaleDto) {
-    const result = await this.flashSaleService.updateFlashSale(id, dto);
+  @ApiOperation({ summary: 'Update the schedule or pricing of an upcoming flash sale (owning vendor only)' })
+  async updateFlashSale(@Request() req, @Param('id') id: string, @Body() dto: UpdateFlashSaleDto) {
+    const vendorId = req.user.sub;
+    const result = await this.flashSaleService.updateFlashSale(id, vendorId, dto);
     return { success: true, message: 'Flash sale updated successfully', data: result };
   }
 

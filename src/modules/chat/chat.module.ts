@@ -9,6 +9,7 @@ import { PredefinedMessage, PredefinedMessageSchema } from './schema/predefined-
 import { ChatService } from './chat.service';
 import { ChatGateway } from './chat.gateway';
 import { ChatController } from './chat.controller';
+import { SocketAuthModule } from '../notifications/socket-auth/socket-auth.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ChatController } from './chat.controller';
       { name: Message.name, schema: MessageSchema },
       { name: PredefinedMessage.name, schema: PredefinedMessageSchema },
     ]),
+    SocketAuthModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],

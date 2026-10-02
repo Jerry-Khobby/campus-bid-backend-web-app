@@ -2,33 +2,29 @@ import {
   WebSocketGateway,
   WebSocketServer,
   OnGatewayConnection,
+  OnGatewayInit,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
-import { JwtService } from '@nestjs/jwt';
+import { Namespace, Socket } from 'socket.io';
+import { SocketAuthService } from './socket-auth/socket-auth.service';
+import { SOCKET_SERVER_OPTIONS } from './socket-auth/socket-origins';
 
-@WebSocketGateway({ cors: true, namespace: '/notifications' })
-export class NotificationsGateway implements OnGatewayConnection {
+@WebSocketGateway({ ...SOCKET_SERVER_OPTIONS, namespace: '/notifications' })
+export class NotificationsGateway implements OnGatewayInit, OnGatewayConnection {
   @WebSocketServer()
-  server: Server;
+  server: Namespace;
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(private readonly socketAuth: SocketAuthService) {}
 
-  async handleConnection(client: Socket) {
-    const token = this.extractToken(client);
-
-    try {
-      const payload = await this.jwtService.verifyAsync(token);
-      client.join(payload.sub);
-    } catch {
-      client.disconnect();
-    }
+  afterInit(namespace: Namespace) {
+    namespace.use((client, next) => this.socketAuth.authorize(client, next));
   }
 
-  private extractToken(client: Socket): string {
-    const authToken = client.handshake.auth?.token;
-    const headerToken = client.handshake.headers?.authorization?.replace('Bearer ', '');
-
-    return authToken || headerToken;
+  async handleConnection(client: Socket) {
+    try {
+      await client.join(this.socketAuth.getUser(client).sub);
+    } catch {
+      client.disconnect(true);
+    }
   }
 
   sendToUser(userId: string, notification: any) {
