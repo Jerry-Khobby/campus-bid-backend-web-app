@@ -83,4 +83,16 @@ describe("AccessTokenStrategy", () => {
 
     expect(cacheManager.set).toHaveBeenCalledWith(`account-active:Vendor:${accountId}`, true, expect.any(Number));
   });
+
+  it("fails open when the cache is unreachable, instead of rejecting every request", async () => {
+    cacheManager.get.mockRejectedValue(new Error("cache connection timed out"));
+
+    await expect(strategy.validate(vendorPayload)).resolves.toEqual(vendorPayload);
+  });
+
+  it("fails open when the database lookup throws, instead of rejecting every request", async () => {
+    selectAccount.mockRejectedValue(new Error("connection not ready"));
+
+    await expect(strategy.validate(vendorPayload)).resolves.toEqual(vendorPayload);
+  });
 });
