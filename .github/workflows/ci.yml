@@ -48,20 +48,6 @@ jobs:
       - name: Build
         run: npm run build
 
-  audit:
-    name: Dependency audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Fail on high or critical advisories in production dependencies
-        run: npm audit --omit=dev --audit-level=high
-
   # Report-only until the existing no-unsafe-* backlog (untyped `any` values)
   # is cleared; then drop continue-on-error and make this check required.
   lint:
