@@ -38,6 +38,13 @@ export class NotificationsController {
     return { success: true, message: 'Notification marked as read', data };
   }
 
+  @Delete()
+  @ApiOperation({ summary: 'Delete all of the authenticated user\'s notifications' })
+  async clearAll(@Request() req) {
+    const data = await this.service.clearAll(req.user.sub);
+    return { success: true, message: 'All notifications cleared', data };
+  }
+
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a notification' })
   async deleteNotification(@Param('id') id: string, @Request() req) {
