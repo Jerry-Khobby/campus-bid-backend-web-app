@@ -1,12 +1,12 @@
 name: CI
 
-# Runs on every push so problems surface before a PR exists, and on every PR
-# into master so branch protection can require these checks before merging.
+# Runs on every pull request, and on pushes to master (merges included).
+# Feature-branch pushes aren't run on their own: once a PR is open each push
+# would otherwise run everything twice, once per event.
 on:
   push:
-    branches: ["**"]
-  pull_request:
     branches: [master]
+  pull_request:
   workflow_dispatch:
 
 permissions:
