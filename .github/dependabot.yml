@@ -1,7 +1,7 @@
 version: 2
 updates:
-  # Minor and patch updates arrive grouped in one weekly PR; major updates
-  # and security fixes get their own PRs so they can be reviewed separately.
+  # Minor and patch updates arrive grouped in one weekly PR. Major updates
+  # are ignored (see below); upgrade those by hand when you're ready.
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -10,8 +10,17 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # Major upgrades usually need code changes, so their PRs fail CI until
+    # someone does that work. Take them on deliberately instead.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # One PR for all action bumps instead of one per action.
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,32 @@
+name: Dependency audit
+
+# Kept out of the main CI so a newly published advisory against a package
+# nobody touched can't turn an unrelated change red. It runs when the
+# dependencies themselves change, and weekly to catch new advisories.
+on:
+  pull_request:
+    paths: [package.json, package-lock.json]
+  push:
+    branches: [master]
+    paths: [package.json, package-lock.json]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fail on high or critical advisories in production dependencies
+        run: npm audit --omit=dev --audit-level=high
